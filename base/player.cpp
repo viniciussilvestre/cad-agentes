@@ -8,11 +8,11 @@ Player::Player(int id, int position, States state, Game* game)
     this->position = position;
     this->state = state;
     this->game = game;
-    // O contador e a posicao do agente no cronograma de INFECTION_TIME turnos.
-    // Quem ja nasce INFECTED nao passa pela incubacao: comeca no fim da janela
-    // de exposicao, senao no turno EXPOSED_TIME cairia no sorteio de
-    // INFECTION_RATE e 80% dos infectados iniciais virariam suscetiveis.
-    infectionCounter = (state == States::INFECTED) ? Constants::EXPOSED_TIME : 0;
+    // O contador mede turnos no estado atual e zera em toda transicao, entao
+    // vale zero tanto para quem nasce SUSCEPTIBLE quanto para quem nasce
+    // INFECTED - este ultimo comeca a fase infecciosa do zero, como qualquer
+    // outro que acabou de adoecer.
+    infectionCounter = 0;
 }
 
 int Player::getPosition() const
@@ -27,56 +27,60 @@ States Player::getState() const
 
 void Player::infection(mt19937& rng)
 {
-    // Cronograma de INFECTION_TIME turnos com um unico contador:
+    // O contador mede turnos NO ESTADO ATUAL e zera em toda transicao:
     //
-    //   1 .. EXPOSED_TIME-1   incubando, nenhum sorteio
-    //   == EXPOSED_TIME       sorteia UMA vez se a exposicao virou doenca
-    //   .. INFECTION_TIME     os DEATH_TIME turnos finais: sorteia a morte a
-    //                         cada um deles
-    //   == INFECTION_TIME     sobreviveu aos tres sorteios -> RECOVERED
+    //   EXPOSED   ate EXPOSED_TIME turnos, sorteando INFECTION_RATE em cada um
+    //             deles. Quem tira o numero cedo adoece em poucos turnos, quem
+    //             tira tarde leva quase a janela inteira, e quem nunca tira
+    //             volta a SUSCEPTIBLE. A incubacao passa a ter duracao
+    //             variavel, que e o comportamento real da doenca: nem todo
+    //             contato vira caso, e os que viram nao viram todos no mesmo
+    //             dia.
     //
-    // Nao consumir o RNG nos turnos de incubacao e inofensivo: o engine e novo
-    // a cada turno, indexado por (id, turno), entao nao existe fluxo continuo
-    // que pudesse ficar defasado.
+    //   INFECTED  DEATH_TIME turnos, sorteando MORTALITY em cada um deles.
+    //             Sobreviveu aos tres -> RECOVERED.
     //
-    // REAVALIAR: INFECTION_RATE e aplicado aqui, como sorteio unico no fim da
-    // incubacao - 80% das exposicoes evaporam e o agente volta a SUSCEPTIBLE
-    // sem nunca ter transmitido. A leitura usual em epidemiologia poria essa
-    // taxa na transmissao por contato (em checkSurroundings), e ai toda
-    // exposicao viraria doenca. Trocar o ponto de aplicacao muda a dinamica
-    // inteira e invalida o golden, entao fica como esta ate haver motivo.
-    // Ver a nota gemea em checkSurroundings.
+    // Os dois relogios sao independentes, e e por isso que o contador zera na
+    // transicao: a duracao da fase infecciosa nao pode depender de quanto tempo
+    // o agente levou para incubar. Sem o zeramento, quem incubasse em 1 turno
+    // ficaria infeccioso por 9 e quem incubasse em 7 ficaria por 3 - o inverso
+    // do pretendido.
+    //
+    // Com a janela inteira, a chance de uma exposicao virar doenca e
+    // 1 - (1 - INFECTION_RATE)^EXPOSED_TIME, e nao INFECTION_RATE.
+    //
+    // REAVALIAR: o contato em checkSurroundings ainda expoe com probabilidade
+    // 1; toda a estocasticidade da transmissao esta concentrada aqui. Ver a
+    // nota gemea la.
     infectionCounter++;
-
-    if (infectionCounter < Constants::EXPOSED_TIME)
-    {
-        return;
-    }
 
     double lower_bound = 0;
     double upper_bound = 100;
     uniform_real_distribution<double> uniform(lower_bound, upper_bound);
     double probability = uniform(rng);
 
-    if (infectionCounter == Constants::EXPOSED_TIME)
+    if (state == States::EXPOSED)
     {
         if (probability <= Constants::INFECTION_RATE)
         {
             state = States::INFECTED;
+            infectionCounter = 0;
+            game->agentsStatusVector[id] = state;
+            return;
         }
-        else
+        if (infectionCounter == Constants::EXPOSED_TIME)
         {
-            // A exposicao nao virou doenca: o agente volta a ser suscetivel e
-            // pode ser exposto de novo num turno seguinte.
+            // A janela fechou sem a infeccao pegar: o agente volta a ser
+            // suscetivel e pode ser exposto de novo num turno seguinte.
             state = States::SUSCEPTIBLE;
             infectionCounter = 0;
+            game->agentsStatusVector[id] = state;
         }
-        game->agentsStatusVector[id] = state;
         return;
     }
 
     // DEAD e terminal, e o return aqui e o que impede a ressurreicao: sem ele,
-    // quem morre no turno INFECTION_TIME cairia no bloco de RECOVERED logo
+    // quem morre no ultimo turno da janela cairia no bloco de RECOVERED logo
     // abaixo e voltaria a vida.
     if (probability <= Constants::MORTALITY)
     {
@@ -86,7 +90,7 @@ void Player::infection(mt19937& rng)
         return;
     }
 
-    if (infectionCounter == Constants::INFECTION_TIME)
+    if (infectionCounter == Constants::DEATH_TIME)
     {
         state = States::RECOVERED;
         infectionCounter = 0;
@@ -136,10 +140,11 @@ void Player::checkSurroundings(const vector<int>& infectedAtNode)
     //    exatamente aqui que o sorteio entraria.
     //
     // 2. RECOVERED tambem e reexposto pela condicao acima, entao nao existe
-    //    imunidade: o modelo e SEIRS, nao SEIR. Como cada curso de 10 turnos
-    //    carrega ~12,6% de morte (MORTALITY em tres sorteios) e os agentes
-    //    reciclam indefinidamente, a letalidade acumulada passa de 50% em
-    //    densidade alta. Tirar RECOVERED da condicao acima da imunidade
+    //    imunidade: o modelo e SEIRS, nao SEIR. Cada curso da doenca carrega
+    //    ~12,6% de morte (MORTALITY em DEATH_TIME sorteios) e os agentes
+    //    reciclam indefinidamente, entao em horizonte longo DEAD e o unico
+    //    estado absorvente e quase todo mundo acaba nele: com 5.000 agentes em
+    //    400 turnos, 89% morrem. Tirar RECOVERED da condicao acima da imunidade
     //    permanente e derruba esse numero.
     if (infectedAtNode[position] > 0)
     {

@@ -3,7 +3,7 @@
 
 namespace Constants
 {
-    constexpr const int INFECTION_RATE {20};
+    constexpr const int INFECTION_RATE {10};
     constexpr const int INFECTION_TIME {10};
     constexpr const int DEATH_TIME {3};
     constexpr const int EXPOSED_TIME {7};
@@ -16,12 +16,13 @@ namespace Constants
     constexpr const int resolutionX = {1920};
     constexpr const int resolutionY = {1080};
     constexpr const int SLOTS = {6};
-    constexpr const unsigned int DEFAULT_SEED = {42};
+    constexpr const unsigned int DEFAULT_SEED = {62};
 
-    // O cronograma de Player::infection depende dessa identidade: os turnos de
-    // sorteio da morte sao exatamente os que sobram entre o fim da incubacao e
-    // o fim da infeccao. Se as tres constantes deixarem de fechar, a janela de
-    // morte muda de tamanho em silencio.
+    // INFECTION_TIME e o curso MAXIMO da doenca: EXPOSED_TIME turnos de
+    // incubacao no pior caso, mais os DEATH_TIME turnos da fase infecciosa. A
+    // incubacao tem duracao variavel (ver Player::infection), entao o curso
+    // tipico e mais curto que INFECTION_TIME - a identidade abaixo so amarra o
+    // teto. Se as tres constantes deixarem de fechar, esse teto passa a mentir.
     static_assert(EXPOSED_TIME + DEATH_TIME == INFECTION_TIME,
                   "EXPOSED_TIME + DEATH_TIME precisa ser igual a INFECTION_TIME");
 }
