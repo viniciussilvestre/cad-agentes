@@ -65,11 +65,8 @@ void Game::startAllDumbThreads()
 int Game::generateLocation(int id) const
 {
     // Turno -1 marca o sorteio de setup, fora do laco de turnos.
-    mt19937 rng = agentEngine(id, -1);
-    int lower_bound = 0;
-    int upper_bound = numberOfNodes - 1;
-    uniform_int_distribution<int> uniform(lower_bound, upper_bound);
-    return uniform(rng);
+    AgentRng rng = agentEngine(id, -1);
+    return (int) rng.below((uint32_t) numberOfNodes);
 }
 
 int Game::generateInfectedLocation(int id) const
@@ -102,38 +99,30 @@ int Game::generateInfectedLocation(int id) const
         }
         // Turno -2: sorteio de setup separado do uniforme, para que trocar o
         // modo de semeadura nao desloque as posicoes dos suscetiveis.
-        mt19937 rng = agentEngine(id, -2);
-        uniform_int_distribution<int> uniform(0, (int) candidates.size() - 1);
-        return candidates[uniform(rng)];
+        AgentRng rng = agentEngine(id, -2);
+        return candidates[rng.below((uint32_t) candidates.size())];
     }
     return generateLocation(id);
 }
 
-mt19937 Game::agentEngine(int id, int turn) const
+AgentRng Game::agentEngine(int id, int turn) const
 {
     // O RNG e indexado por (id do agente, turno), nunca por um fluxo sequencial
     // compartilhado: os sorteios de um agente num turno dependem so desses tres
-    // valores, e nao da ordem em que os agentes rodam. Assim a saida continua
-    // reprodutivel se o laco de agentes for paralelizado depois.
-    return mt19937(hashSeed(baseSeed, id, turn));
+    // valores, e nao da ordem em que os agentes rodam. E o que permite
+    // paralelizar o laco de agentes sem mudar a saida.
+    AgentRng rng;
+    rng.seed = hashSeed(baseSeed, id, turn);
+    rng.index = 0;
+    return rng;
 }
 
-unsigned int Game::hashSeed(unsigned int seed, int id, int turn)
+uint64_t Game::hashSeed(unsigned int seed, int id, int turn)
 {
     uint64_t hash = splitMix64((uint64_t) seed);
     hash = splitMix64(hash ^ (uint64_t) (uint32_t) id);
     hash = splitMix64(hash ^ (uint64_t) (uint32_t) turn);
-    return (unsigned int) (hash ^ (hash >> 32));
-}
-
-// Mistura splitmix64: avalanche boa o suficiente para que sementes vizinhas
-// (id e turno consecutivos) produzam fluxos sem correlacao.
-uint64_t Game::splitMix64(uint64_t value)
-{
-    value += 0x9E3779B97F4A7C15ULL;
-    value = (value ^ (value >> 30)) * 0xBF58476D1CE4E5B9ULL;
-    value = (value ^ (value >> 27)) * 0x94D049BB133111EBULL;
-    return value ^ (value >> 31);
+    return hash;
 }
 
 pair<int, int> Game::mapNodes(int x, int y, int x_min, int x_max, int y_min, int y_max) const
@@ -477,7 +466,7 @@ void Game::step()
         {
             continue;
         }
-        mt19937 rng = agentEngine(agent.id, turns);
+        AgentRng rng = agentEngine(agent.id, turns);
         agent.commonRoutine(neighbors, numberOfNodes, infectedAtNode, rng);
     }
     turns++;

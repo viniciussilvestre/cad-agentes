@@ -1,8 +1,8 @@
 #ifndef PLAYER_H
 #define PLAYER_H
 #include "enums.h"
+#include "rng.h"
 #include <vector>
-#include <random>
 
 using namespace std;
 
@@ -27,10 +27,10 @@ class Player
 
         [[nodiscard]] int getPosition() const;
         [[nodiscard]] States getState() const;
-        void commonRoutine(const vector<int>& neighbors, int numberOfNodes, const vector<int>& infectedAtNode, mt19937& rng);
-        void infection(mt19937& rng);
+        void commonRoutine(const vector<int>& neighbors, int numberOfNodes, const vector<int>& infectedAtNode, AgentRng& rng);
+        void infection(AgentRng& rng);
         void checkSurroundings(const vector<int>& infectedAtNode);
-        void updatePosition(const vector<int>& neighbors, int numberOfNodes, mt19937& rng);
+        void updatePosition(const vector<int>& neighbors, int numberOfNodes, AgentRng& rng);
 };
 
 #endif //PLAYER_H
