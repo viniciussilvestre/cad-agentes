@@ -106,8 +106,8 @@ static int farthestNode(const vector<int>& distance)
 
 int main(int argc, char** argv)
 {
-    int width = 200;
-    int height = 200;
+    int width = 500;
+    int height = 500;
     double shortcuts = 0.01;
     int regionsX = 5;
     int regionsY = 2;

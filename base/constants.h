@@ -3,7 +3,7 @@
 
 namespace Constants
 {
-    constexpr const int INFECTION_RATE {5};
+    constexpr const int INFECTION_RATE {10};
     constexpr const int INFECTION_TIME {10};
     constexpr const int DEATH_TIME {3};
     constexpr const int EXPOSED_TIME {7};

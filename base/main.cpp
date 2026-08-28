@@ -4,11 +4,11 @@
 
 int main(int argc, char** argv)
 {
-    int initialNumberHealthy = 590;
-    int initialNumberInfected = 10;
-    int numberOfTurns = 250;
+    int initialNumberHealthy = 239000;
+    int initialNumberInfected = 1000;
+    int numberOfTurns = 650;
     unsigned int seed = Constants::DEFAULT_SEED;
-    string mapFile = "A1100a.txt";
+    string mapFile = "map.txt";
     string csvFile;
     SeedMode seedMode = SeedMode::Uniform;
     int seedTarget = 0;
