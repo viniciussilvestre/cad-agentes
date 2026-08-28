@@ -4,6 +4,10 @@
 #include <vector>
 #include <random>
 #include <iostream>
+#include <fstream>
+#include <string>
+#include <utility>
+#include <cstdint>
 
 using namespace std;
 using Point = pair<int, int>;
@@ -12,8 +16,6 @@ using Edge = pair<Point, Point>;
 class Game
 {
     public:
-        static int newId;
-        int id;
         int initialNumberHealthy;
         int initialNumberInfected;
         int turns;
@@ -21,8 +23,6 @@ class Game
         int max_y_coordinate;
         int min_x_coordinate;
         int min_y_coordinate;
-        double widthPercentage;
-        double heightPercentage;
         int numberOfNodes;
         int numberOfRegions;
         bool isRunning;
@@ -41,25 +41,33 @@ class Game
 
         Game(int initialNumberHealthy, int initialNumberInfected);
 
+        void setSeed(unsigned int seed);
+        void setSeedMode(SeedMode mode, int regionOrNode = 0);
+        void setCsvOutput(const string& fileName);
         [[nodiscard]] int generateLocation(int id) const;
+        [[nodiscard]] int generateInfectedLocation(int id) const;
         [[nodiscard]] mt19937 agentEngine(int id, int turn) const;
         [[nodiscard]] pair<int, int> mapNodes(int x, int y, int x_min, int x_max, int y_min, int y_max) const;
         [[nodiscard]] vector<int> countStates() const;
         [[nodiscard]] vector<int> countStatesByRegion() const;
         static unsigned int hashSeed(unsigned int seed, int id, int turn);
         void checkConservation(const vector<int>& counts) const;
+        void initializeGame(const string& fileName = "A1100a.txt");
         void initiateThreads(int numberOfThreads, States state);
         void remapNodes();
-        int claimSlot(int deltaX, int deltaY);
-        int cardinalSlot(int node, int preferredSlot);
+        int claimSlot(int node, int preferredSlot);
         void startAllDumbThreads();
         void buildInfectedAtNode();
         void step();
+        void run(int numberOfTurns);
         void reset();
         void quit();
 
     private:
         unsigned int baseSeed;
+        SeedMode seedMode = SeedMode::Uniform;
+        int seedTarget = 0;
+        string csvFileName;
         static uint64_t splitMix64(uint64_t value);
 };
 

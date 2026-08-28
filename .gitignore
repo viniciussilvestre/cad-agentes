@@ -1,0 +1,11 @@
+.DS_Store
+
+# binarios e objetos gerados pelo Makefile
+GameC
+runTests
+genGraph
+*.o
+
+# saida do cmake
+cmake-build-debug/
+build/

@@ -11,16 +11,19 @@ class Game;
 class Player
 {
     private:
-    
+
     public:
-        static int newId;
+        // O id e local ao jogo dono do agente: vale como indice direto em
+        // agentsPositionVector e agentsStatusVector. Nao existe contador global,
+        // senao o segundo Game criaria agentes com id fora dos limites dos
+        // proprios vetores.
         int id;
         int position;
         int infectionCounter;
         Game* game;
         States state;
 
-        Player(int position, States state, Game* game);
+        Player(int id, int position, States state, Game* game);
 
         [[nodiscard]] int getPosition() const;
         [[nodiscard]] States getState() const;
