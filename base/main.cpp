@@ -4,7 +4,7 @@
 
 int main(int argc, char** argv)
 {
-    int initialNumberHealthy = 790;
+    int initialNumberHealthy = 590;
     int initialNumberInfected = 10;
     int numberOfTurns = 250;
     unsigned int seed = Constants::DEFAULT_SEED;
