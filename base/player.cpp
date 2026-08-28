@@ -38,6 +38,14 @@ void Player::infection(mt19937& rng)
     // Nao consumir o RNG nos turnos de incubacao e inofensivo: o engine e novo
     // a cada turno, indexado por (id, turno), entao nao existe fluxo continuo
     // que pudesse ficar defasado.
+    //
+    // REAVALIAR: INFECTION_RATE e aplicado aqui, como sorteio unico no fim da
+    // incubacao - 80% das exposicoes evaporam e o agente volta a SUSCEPTIBLE
+    // sem nunca ter transmitido. A leitura usual em epidemiologia poria essa
+    // taxa na transmissao por contato (em checkSurroundings), e ai toda
+    // exposicao viraria doenca. Trocar o ponto de aplicacao muda a dinamica
+    // inteira e invalida o golden, entao fica como esta ate haver motivo.
+    // Ver a nota gemea em checkSurroundings.
     infectionCounter++;
 
     if (infectionCounter < Constants::EXPOSED_TIME)
@@ -120,6 +128,19 @@ void Player::checkSurroundings(const vector<int>& infectedAtNode)
     // O(1): para fins de contato basta saber se ha algum INFECTED no no. O
     // proprio agente e SUSCEPTIBLE ou RECOVERED aqui, entao nunca se conta a si
     // mesmo. infectedAtNode e reconstruido pelo Game no inicio do turno.
+    //
+    // REAVALIAR: dois pontos herdados, mantidos de proposito por enquanto.
+    //
+    // 1. O contato expoe com probabilidade 1 - basta um INFECTED no no. Se
+    //    INFECTION_RATE algum dia migrar para ca (ver a nota em infection), e
+    //    exatamente aqui que o sorteio entraria.
+    //
+    // 2. RECOVERED tambem e reexposto pela condicao acima, entao nao existe
+    //    imunidade: o modelo e SEIRS, nao SEIR. Como cada curso de 10 turnos
+    //    carrega ~12,6% de morte (MORTALITY em tres sorteios) e os agentes
+    //    reciclam indefinidamente, a letalidade acumulada passa de 50% em
+    //    densidade alta. Tirar RECOVERED da condicao acima da imunidade
+    //    permanente e derruba esse numero.
     if (infectedAtNode[position] > 0)
     {
         state = States::EXPOSED;

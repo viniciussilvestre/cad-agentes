@@ -3,8 +3,8 @@
 // Os dois usam uma grade pequena sem atalhos, escrita pelo proprio teste para
 // que ele conheca a geometria (largura) e nao dependa do genGraph.
 
-#include "../incompleto/game.h"
-#include "../incompleto/constants.h"
+#include "../base/game.h"
+#include "../base/constants.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
