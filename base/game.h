@@ -1,8 +1,8 @@
 #ifndef GAME_H
 #define GAME_H
 #include "player.h"
+#include "rng.h"
 #include <vector>
-#include <random>
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -46,11 +46,11 @@ class Game
         void setCsvOutput(const string& fileName);
         [[nodiscard]] int generateLocation(int id) const;
         [[nodiscard]] int generateInfectedLocation(int id) const;
-        [[nodiscard]] mt19937 agentEngine(int id, int turn) const;
+        [[nodiscard]] AgentRng agentEngine(int id, int turn) const;
         [[nodiscard]] pair<int, int> mapNodes(int x, int y, int x_min, int x_max, int y_min, int y_max) const;
         [[nodiscard]] vector<int> countStates() const;
         [[nodiscard]] vector<int> countStatesByRegion() const;
-        static unsigned int hashSeed(unsigned int seed, int id, int turn);
+        static uint64_t hashSeed(unsigned int seed, int id, int turn);
         void checkConservation(const vector<int>& counts) const;
         void initializeGame(const string& fileName = "A1100a.txt");
         void initiateThreads(int numberOfThreads, States state);
@@ -68,7 +68,6 @@ class Game
         SeedMode seedMode = SeedMode::Uniform;
         int seedTarget = 0;
         string csvFileName;
-        static uint64_t splitMix64(uint64_t value);
 };
 
 #endif //GAME_H

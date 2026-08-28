@@ -25,7 +25,7 @@ States Player::getState() const
     return state;
 }
 
-void Player::infection(mt19937& rng)
+void Player::infection(AgentRng& rng)
 {
     // O contador mede turnos NO ESTADO ATUAL e zera em toda transicao:
     //
@@ -54,14 +54,14 @@ void Player::infection(mt19937& rng)
     // nota gemea la.
     infectionCounter++;
 
-    double lower_bound = 0;
-    double upper_bound = 100;
-    uniform_real_distribution<double> uniform(lower_bound, upper_bound);
-    double probability = uniform(rng);
+    // Sorteio como inteiro de 32 bits, comparado contra o limiar equivalente a
+    // taxa. Sem double no laco: ver a nota em constants.h sobre reproduzir o
+    // mesmo resultado em CPU e GPU.
+    uint32_t probability = rng.next();
 
     if (state == States::EXPOSED)
     {
-        if (probability <= Constants::INFECTION_RATE)
+        if (probability < Constants::INFECTION_THRESHOLD)
         {
             state = States::INFECTED;
             infectionCounter = 0;
@@ -82,7 +82,7 @@ void Player::infection(mt19937& rng)
     // DEAD e terminal, e o return aqui e o que impede a ressurreicao: sem ele,
     // quem morre no ultimo turno da janela cairia no bloco de RECOVERED logo
     // abaixo e voltaria a vida.
-    if (probability <= Constants::MORTALITY)
+    if (probability < Constants::MORTALITY_THRESHOLD)
     {
         state = States::DEAD;
         infectionCounter = 0;
@@ -98,7 +98,7 @@ void Player::infection(mt19937& rng)
     }
 }
 
-void Player::commonRoutine(const vector<int>& neighbors, int numberOfNodes, const vector<int>& infectedAtNode, mt19937& rng)
+void Player::commonRoutine(const vector<int>& neighbors, int numberOfNodes, const vector<int>& infectedAtNode, AgentRng& rng)
 {
     // DEAD e terminal: nao se move, nao transmite, nao transiciona.
     if (state == States::DEAD)
@@ -154,7 +154,7 @@ void Player::checkSurroundings(const vector<int>& infectedAtNode)
     }
 }
 
-void Player::updatePosition(const vector<int>& neighbors, int numberOfNodes, mt19937& rng)
+void Player::updatePosition(const vector<int>& neighbors, int numberOfNodes, AgentRng& rng)
 {
     // Grau fixo: todo no tem exatamente SLOTS slots e os vazios apontam para o
     // proprio no. Sorteia-se um slot e pronto - sem laco de rejeicao, sem -1,
@@ -162,8 +162,7 @@ void Player::updatePosition(const vector<int>& neighbors, int numberOfNodes, mt1
     //
     // Layout SoA sobre os slots: neighbors[k * numberOfNodes + i]. Agentes que
     // sorteiem o mesmo k leem posicoes proximas na memoria.
-    uniform_int_distribution<int> uniform(0, Constants::SLOTS - 1);
-    int slot = uniform(rng);
+    int slot = (int) rng.below(Constants::SLOTS);
     position = neighbors[slot * numberOfNodes + position];
     game->agentsPositionVector[id] = position;
 }
