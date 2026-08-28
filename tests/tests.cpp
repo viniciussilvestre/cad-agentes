@@ -3,7 +3,8 @@
 // Os dois usam uma grade pequena sem atalhos, escrita pelo proprio teste para
 // que ele conheca a geometria (largura) e nao dependa do genGraph.
 
-#include "../PlagueGame.h"
+#include "../incompleto/game.h"
+#include "../incompleto/constants.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -76,8 +77,7 @@ static bool testUniformStationary()
     string mapFile = "test_grid_stationary.txt";
     writeGridMap(mapFile, WIDTH, HEIGHT);
 
-    Player::newId = 0;
-    PlagueGame game(1, 0);
+    Game game(1, 0);
     game.setSeed(12345);
     game.initializeGame(mapFile);
     game.startAllDumbThreads();
@@ -91,9 +91,9 @@ static bool testUniformStationary()
     vector<double> columnSum(numberOfNodes, 0.0);
     for (int node = 0; node < numberOfNodes; node++)
     {
-        for (int slot = 0; slot < PlagueGame::SLOTS; slot++)
+        for (int slot = 0; slot < Constants::SLOTS; slot++)
         {
-            columnSum[game.neighbors[slot * numberOfNodes + node]] += 1.0 / PlagueGame::SLOTS;
+            columnSum[game.neighbors[slot * numberOfNodes + node]] += 1.0 / Constants::SLOTS;
         }
     }
     double minimumColumn = columnSum[0];
@@ -109,7 +109,7 @@ static bool testUniformStationary()
     for (int turn = 0; turn < TURNS; turn++)
     {
         game.step();
-        visits[game.agentsVector[0].position]++;
+        visits[game.agents[0].position]++;
     }
     remove(mapFile.c_str());
 
@@ -148,8 +148,7 @@ static bool testLaziness()
     string mapFile = "test_grid_laziness.txt";
     writeGridMap(mapFile, WIDTH, HEIGHT);
 
-    Player::newId = 0;
-    PlagueGame game(AGENTS, 0);
+    Game game(AGENTS, 0);
     game.setSeed(999);
     game.initializeGame(mapFile);
     game.startAllDumbThreads();
@@ -157,7 +156,7 @@ static bool testLaziness()
     vector<int> initialParity(AGENTS);
     for (int i = 0; i < AGENTS; i++)
     {
-        initialParity[i] = gridParity(game.agentsVector[i].position, WIDTH);
+        initialParity[i] = gridParity(game.agents[i].position, WIDTH);
     }
 
     int turnsWithBothParities = 0;
@@ -170,7 +169,7 @@ static bool testLaziness()
         int currentByParity[2] = {0, 0};
         for (int i = 0; i < AGENTS; i++)
         {
-            int position = game.agentsVector[i].position;
+            int position = game.agents[i].position;
             currentByParity[gridParity(position, WIDTH)]++;
             atNodeByInitialParity[position * 2 + initialParity[i]]++;
         }
@@ -200,12 +199,81 @@ static bool testLaziness()
     return passed;
 }
 
+// Dois jogos no mesmo processo precisam ser independentes. Com o contador de id
+// global que existia antes, os agentes do segundo jogo nasciam com id >= N e
+// escreviam fora dos limites dos proprios vetores consolidados: o segundo jogo
+// divergia do primeiro quando nao corrompia o heap.
+static bool testTwoGamesAreIndependent()
+{
+    const int WIDTH = 8;
+    const int HEIGHT = 8;
+    const int HEALTHY = 150;
+    const int INFECTED = 10;
+    const int TURNS = 120;
+    string mapFile = "test_grid_twogames.txt";
+    writeGridMap(mapFile, WIDTH, HEIGHT);
+
+    Game first(HEALTHY, INFECTED);
+    first.setSeed(2024);
+    first.initializeGame(mapFile);
+    first.startAllDumbThreads();
+
+    Game second(HEALTHY, INFECTED);
+    second.setSeed(2024);
+    second.initializeGame(mapFile);
+    second.startAllDumbThreads();
+
+    bool idsInRange = true;
+    for (const Player& agent : second.agents)
+    {
+        if (agent.id < 0 || agent.id >= (int) second.agentsStatusVector.size())
+        {
+            idsInRange = false;
+        }
+    }
+
+    bool identical = true;
+    for (int turn = 0; turn < TURNS; turn++)
+    {
+        first.step();
+        second.step();
+        if (first.countStates() != second.countStates())
+        {
+            identical = false;
+            break;
+        }
+    }
+    remove(mapFile.c_str());
+
+    vector<int> counts = first.countStates();
+    int total = 0;
+    for (int count : counts)
+    {
+        total += count;
+    }
+    bool conserved = (total == HEALTHY + INFECTED);
+
+    bool passed = idsInRange && identical && conserved;
+    cout << "testTwoGamesAreIndependent: 2 jogos, " << (HEALTHY + INFECTED) << " agentes cada, "
+         << TURNS << " turnos" << endl;
+    cout << "  ids do segundo jogo dentro de [0, " << second.agentsStatusVector.size() << ")"
+         << "  ->  " << (idsInRange ? "ok" : "FALHOU") << endl;
+    cout << "  mesma semente da as mesmas contagens em todo turno  ->  "
+         << (identical ? "ok" : "FALHOU") << endl;
+    cout << "  conservacao S+E+I+R+D = " << total << " (esperado " << (HEALTHY + INFECTED) << ")"
+         << "  ->  " << (conserved ? "ok" : "FALHOU") << endl;
+    cout << "  " << (passed ? "PASSOU" : "FALHOU") << endl;
+    return passed;
+}
+
 int main()
 {
     bool allPassed = true;
     allPassed = testUniformStationary() && allPassed;
     cout << endl;
     allPassed = testLaziness() && allPassed;
+    cout << endl;
+    allPassed = testTwoGamesAreIndependent() && allPassed;
     cout << endl << (allPassed ? "TODOS OS TESTES PASSARAM" : "HOUVE FALHA") << endl;
     return allPassed ? EXIT_SUCCESS : EXIT_FAILURE;
 }
