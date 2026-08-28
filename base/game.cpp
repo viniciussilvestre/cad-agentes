@@ -5,6 +5,8 @@
 #include <limits>
 #include <sstream>
 #include <cstdlib>
+#include <chrono>
+#include <iomanip>
 
 Game::Game(int initialNumberHealthy, int initialNumberInfected)
 {
@@ -498,9 +500,16 @@ void Game::run(int numberOfTurns)
     }
 
     cout << "turno,S,E,I,R,D" << endl;
+    // Cronometra so o step(): o custo do CSV e do cout nao diz nada sobre o
+    // ganho de paralelizar o laco de agentes.
+    double stepSeconds = 0.0;
     for (int turn = 0; turn < numberOfTurns; turn++)
     {
+        chrono::steady_clock::time_point before = chrono::steady_clock::now();
         step();
+        chrono::steady_clock::time_point after = chrono::steady_clock::now();
+        stepSeconds += chrono::duration<double>(after - before).count();
+
         vector<int> counts = countStates();
         checkConservation(counts);
         cout << turns << "," << counts[static_cast<int>(States::SUSCEPTIBLE)]
@@ -526,6 +535,14 @@ void Game::run(int numberOfTurns)
         }
     }
     isRunning = false;
+
+    // Metrica unica de desempenho, comparavel entre versoes e entre escalas.
+    // Sai em cerr, e nao em cout, porque o stdout e comparado byte a byte
+    // contra o golden.
+    double elapsed = (stepSeconds > 1e-9) ? stepSeconds : 1e-9;
+    double agentTurns = (double) agents.size() * (double) numberOfTurns;
+    cerr << "passo: " << fixed << setprecision(3) << elapsed << " s   "
+         << setprecision(0) << (agentTurns / elapsed) << " agentes*turnos/s" << endl;
 }
 
 void Game::reset()

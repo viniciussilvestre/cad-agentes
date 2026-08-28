@@ -2,7 +2,9 @@
 
 # binarios e objetos gerados pelo Makefile
 GameC
+GameC_omp
 runTests
+runTests_omp
 genGraph
 *.o
 
