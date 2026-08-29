@@ -22,6 +22,7 @@ Game::Game(int initialNumberHealthy, int initialNumberInfected)
     baseSeed = Constants::DEFAULT_SEED;
     agentsPositionVector.assign((initialNumberHealthy + initialNumberInfected), 0);
     agentsStatusVector.assign((initialNumberHealthy + initialNumberInfected), States::SUSCEPTIBLE);
+    agentsInfectionCounter.assign((initialNumberHealthy + initialNumberInfected), 0);
     this->initialNumberHealthy = initialNumberHealthy;
     this->initialNumberInfected = initialNumberInfected;
 }
@@ -42,25 +43,37 @@ void Game::setCsvOutput(const string& fileName)
     csvFileName = fileName;
 }
 
-void Game::initiateThreads(int numberOfThreads, States state)
-{
-    for (int i = 0; i < numberOfThreads; i++)
-    {
-        // agents e a unica dona dos agentes: o id e a posicao na qual o agente
-        // entra no vetor, entao serve de indice direto nos vetores consolidados.
-        int playerId = (int) agents.size();
-        int startNode = (state == States::INFECTED) ? generateInfectedLocation(playerId) : generateLocation(playerId);
-        agents.emplace_back(playerId, startNode, state, this);
-        Player& player = agents.back();
-        agentsPositionVector[player.id] = player.position;
-        agentsStatusVector[player.id] = player.state;
-    }
-}
-
 void Game::startAllDumbThreads()
 {
-    initiateThreads(initialNumberHealthy, States::SUSCEPTIBLE);
-    initiateThreads(initialNumberInfected, States::INFECTED);
+    // Os ids sao 0..N-1 e a posicao inicial e funcao pura do id, entao o setup
+    // tambem e paralelo. Antes era um emplace_back serial de 100 milhoes de
+    // objetos - alocacao, crescimento do vetor e copia, tudo em uma thread.
+    //
+    // Os suscetiveis vem primeiro e os infectados depois, como antes: o RNG e
+    // indexado pelo id, entao trocar a ordem daria outro fluxo a cada agente.
+    //
+    // As checagens de limite da semeadura sao feitas aqui fora porque
+    // generateInfectedLocation aborta com exit() em caso de erro, e sair de
+    // dentro de uma regiao paralela nao e forma de reportar problema de
+    // configuracao.
+    if (initialNumberInfected > 0)
+    {
+        (void) generateInfectedLocation(0);
+    }
+
+    int numberOfAgents = initialNumberHealthy + initialNumberInfected;
+    #pragma omp parallel for schedule(static)
+    for (int id = 0; id < numberOfAgents; id++)
+    {
+        bool infected = (id >= initialNumberHealthy);
+        agentsPositionVector[id] = infected ? generateInfectedLocation(id) : generateLocation(id);
+        agentsStatusVector[id] = infected ? States::INFECTED : States::SUSCEPTIBLE;
+        // O contador mede turnos no estado atual e zera em toda transicao, entao
+        // vale zero tanto para quem nasce SUSCEPTIBLE quanto para quem nasce
+        // INFECTED - este ultimo comeca a fase infecciosa do zero, como qualquer
+        // outro que acabou de adoecer.
+        agentsInfectionCounter[id] = 0;
+    }
 }
 
 int Game::generateLocation(int id) const
@@ -387,33 +400,42 @@ void Game::initializeGame(const string& fileName)
     }
 
     infectedAtNode.assign(numberOfNodes, 0);
-    touchedNodes.clear();
 
     remapNodes();
 }
 
 void Game::buildInfectedAtNode()
 {
-    // Zera so os nos escritos no turno anterior. Com numberOfNodes muito maior
-    // que o numero de agentes, limpar o vetor inteiro custaria mais que o
-    // trabalho util (40.000 nos contra alguns milhares de agentes).
-    for (int node : touchedNodes)
-    {
-        infectedAtNode[node] = 0;
-    }
-    touchedNodes.clear();
+    // Bandeira, e nao contagem. checkSurroundings so pergunta se ha ALGUM
+    // infectado no no (player.cpp), nunca quantos - entao guardar a contagem
+    // era trabalho jogado fora, e era ele que obrigava esta passada a ser
+    // serial: `infectedAtNode[pos]++` de varias threads exige atomico.
+    //
+    // Com bandeira, duas threads que escrevem o mesmo no escrevem o mesmo 1. A
+    // corrida existe e e inofensiva: nao ha valor intermediario possivel, e a
+    // saida continua bit-a-bit identica a da versao sequencial. Sem atomico,
+    // sem reducao, sem merge de listas por thread.
+    //
+    // O `if` antes da escrita nao e microtuning, e o que evita a tempestade de
+    // coerencia: com 100 milhoes de agentes em 40.000 nos sao ~2.500 agentes
+    // por no, logo ~2.500 escritas redundantes na mesma linha de cache, cada
+    // uma invalidando a copia de todos os outros nucleos. Lendo antes, a linha
+    // fica em estado compartilhado e so a primeira escrita de cada no paga o
+    // custo; as demais viram leitura local.
+    //
+    // touchedNodes morreu junto: manter a lista dos nos sujos exigiria um merge
+    // por thread, e zerar o vetor inteiro e uma passada sequencial de
+    // numberOfNodes bytes - irrelevante perto de numberOfAgents.
+    fill(infectedAtNode.begin(), infectedAtNode.end(), 0);
 
-    // Uma unica passada sobre agents. DEAD nunca e INFECTED, entao nao
-    // transmite nem conta como contato.
-    for (const Player& agent : agents)
+    // DEAD nunca e INFECTED, entao nao transmite nem conta como contato.
+    int numberOfAgents = (int) agentsStatusVector.size();
+    #pragma omp parallel for schedule(static)
+    for (int id = 0; id < numberOfAgents; id++)
     {
-        if (agent.state == States::INFECTED)
+        if (agentsStatusVector[id] == States::INFECTED && infectedAtNode[agentsPositionVector[id]] == 0)
         {
-            if (infectedAtNode[agent.position] == 0)
-            {
-                touchedNodes.emplace_back(agent.position);
-            }
-            infectedAtNode[agent.position]++;
+            infectedAtNode[agentsPositionVector[id]] = 1;
         }
     }
 }
@@ -460,11 +482,10 @@ void Game::checkConservation(const vector<int>& counts) const
 
 void Game::step()
 {
-    // buildInfectedAtNode fica serial de proposito: e O(agentes), barato perto
-    // do laco abaixo, e paralelizar exigiria atomico no infectedAtNode[pos]++
-    // mais um merge por thread do touchedNodes. Serve tambem de barreira: o
-    // retrato dos infectados precisa estar pronto antes de qualquer agente
-    // comecar a ler.
+    // buildInfectedAtNode e O(agentes) e roda em paralelo (ver la o porque de
+    // nao precisar de atomico). Serve tambem de barreira: o retrato dos
+    // infectados precisa estar pronto antes de qualquer agente comecar a ler,
+    // e o fim da regiao paralela de la garante isso.
     buildInfectedAtNode();
 
     // O laco de agentes e paralelo por construcao, nao por acaso:
@@ -500,17 +521,17 @@ void Game::step()
     //
     // static e a pior com 10 threads justamente porque os E-cores seguram a
     // barreira. guided fica perto do melhor nas duas colunas, entao e o padrao.
-    int numberOfAgents = (int) agents.size();
+    int numberOfAgents = (int) agentsStatusVector.size();
     #pragma omp parallel for schedule(guided)
-    for (int i = 0; i < numberOfAgents; i++)
+    for (int id = 0; id < numberOfAgents; id++)
     {
-        Player& agent = agents[i];
-        if (agent.state == States::DEAD)
+        if (agentsStatusVector[id] == States::DEAD)
         {
             continue;
         }
-        AgentRng rng = agentEngine(agent.id, turns);
-        agent.commonRoutine(neighbors, numberOfNodes, infectedAtNode, rng);
+        AgentRng rng = agentEngine(id, turns);
+        agentTurn(id, neighbors, numberOfNodes, infectedAtNode,
+                  agentsPositionVector, agentsStatusVector, agentsInfectionCounter, rng);
     }
     turns++;
 }
@@ -543,11 +564,10 @@ void Game::run(int numberOfTurns)
 
 void Game::reset()
 {
-    agents.clear();
     fill(infectedAtNode.begin(), infectedAtNode.end(), 0);
-    touchedNodes.clear();
     fill(agentsPositionVector.begin(), agentsPositionVector.end(), 0);
     fill(agentsStatusVector.begin(), agentsStatusVector.end(), States::SUSCEPTIBLE);
+    fill(agentsInfectionCounter.begin(), agentsInfectionCounter.end(), 0);
     turns = 0;
     isRunning = false;
 }
