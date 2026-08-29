@@ -1,7 +1,10 @@
 #ifndef ENUMS_H
 #define ENUMS_H
 
-enum class States {
+// Tipo base explicito: sao cinco valores, cabem num byte. Sem isso o enum vira
+// int e agentsStatusVector custa 4 bytes por agente - 400 MB com 100 milhoes de
+// agentes, para guardar um numero que vai de 0 a 4.
+enum class States : unsigned char {
     SUSCEPTIBLE = 0,
     EXPOSED = 1,
     INFECTED = 2,
