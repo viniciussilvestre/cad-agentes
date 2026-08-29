@@ -10,21 +10,31 @@ ifeq ($(UNAME_S),Darwin)
   OMP_PREFIX = $(shell brew --prefix libomp 2>/dev/null || echo /opt/homebrew/opt/libomp)
   OMPFLAGS   = -Xpreprocessor -fopenmp -I$(OMP_PREFIX)/include
   OMPLIBS    = -L$(OMP_PREFIX)/lib -lomp
+  HAVE_METAL = 1
 else
   OMPFLAGS   = -fopenmp
   OMPLIBS    = -fopenmp
+  HAVE_METAL =
 endif
 
 MTL_SRCS  = metal/main.cpp metal/game.cpp
 MTL_HDRS  = metal/game.h metal/enums.h metal/constants.h metal/rng.h metal/gpu.h
 MTL_FRAME = -framework Metal -framework Foundation
 
+# Metal so existe no macOS: fora dele o alvo sai do `all`/`golden` em vez de
+# quebrar o build inteiro.
+ifdef HAVE_METAL
+  METAL_TARGETS = GameC_metal kernels.metallib
+else
+  METAL_TARGETS =
+endif
+
 BASE_SRCS = base/main.cpp base/game.cpp base/player.cpp
 BASE_HDRS = base/game.h base/player.h base/enums.h base/constants.h
 OMP_SRCS  = openmp/main.cpp openmp/game.cpp openmp/player.cpp
 OMP_HDRS  = openmp/game.h openmp/player.h openmp/enums.h openmp/constants.h
 
-all: GameC GameC_omp GameC_metal kernels.metallib $(GENERATOR)
+all: GameC GameC_omp $(METAL_TARGETS) $(GENERATOR)
 
 # Cada versao compila da propria pasta, sem fonte compartilhada: se uma quebrar,
 # a outra continua de pe.
@@ -33,6 +43,8 @@ GameC: $(BASE_SRCS) $(BASE_HDRS)
 
 GameC_omp: $(OMP_SRCS) $(OMP_HDRS)
 	$(CXX) $(CXXFLAGS) $(OMPFLAGS) -Iopenmp -o $@ $(OMP_SRCS) $(OMPLIBS)
+
+ifdef HAVE_METAL
 
 # O shader compila offline: erro de kernel vira erro de build, e nao surpresa em
 # tempo de execucao. Alem disso e o que habilita o profiler do Xcode.
@@ -44,6 +56,16 @@ kernels.metallib: metal/kernels.metal $(MTL_HDRS)
 # gpu.mm e Objective-C++ (unico arquivo que enxerga o Metal); o resto e C++ puro.
 GameC_metal: $(MTL_SRCS) metal/gpu.mm $(MTL_HDRS)
 	$(CXX) $(CXXFLAGS) -Imetal -o $@ $(MTL_SRCS) metal/gpu.mm -fobjc-arc $(MTL_FRAME)
+
+else
+
+# Pedir o alvo Metal na mao fora do macOS falha com recado claro, e nao com um
+# erro de compilador sobre -fobjc-arc / -framework.
+kernels.metallib GameC_metal:
+	@echo "$@: alvo Metal so compila no macOS (uname -s = $(UNAME_S))." >&2
+	@exit 1
+
+endif
 
 $(GENERATOR): tools/genGraph.cpp
 	$(CXX) $(CXXFLAGS) -o $@ tools/genGraph.cpp
@@ -64,10 +86,12 @@ test: runTests runTests_omp
 
 # Bit-a-bit contra o golden, nas duas versoes e em varias contagens de thread.
 # Divergencia com N threads e race.
-golden: GameC GameC_omp GameC_metal kernels.metallib
+golden: GameC GameC_omp $(METAL_TARGETS)
 	./scripts/check_golden.sh ./GameC
 	./scripts/check_golden.sh ./GameC_omp
+ifdef HAVE_METAL
 	./scripts/check_golden.sh ./GameC_metal
+endif
 
 clean:
 	rm -f GameC GameC_omp GameC_metal kernels.metallib runTests runTests_omp \
