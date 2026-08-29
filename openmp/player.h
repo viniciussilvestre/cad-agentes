@@ -27,9 +27,9 @@ class Player
 
         [[nodiscard]] int getPosition() const;
         [[nodiscard]] States getState() const;
-        void commonRoutine(const vector<int>& neighbors, int numberOfNodes, const vector<int>& infectedAtNode, AgentRng& rng);
+        void commonRoutine(const vector<int>& neighbors, int numberOfNodes, const vector<unsigned char>& infectedAtNode, AgentRng& rng);
         void infection(AgentRng& rng);
-        void checkSurroundings(const vector<int>& infectedAtNode);
+        void checkSurroundings(const vector<unsigned char>& infectedAtNode);
         void updatePosition(const vector<int>& neighbors, int numberOfNodes, AgentRng& rng);
 };
 

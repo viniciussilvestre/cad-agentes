@@ -98,7 +98,7 @@ void Player::infection(AgentRng& rng)
     }
 }
 
-void Player::commonRoutine(const vector<int>& neighbors, int numberOfNodes, const vector<int>& infectedAtNode, AgentRng& rng)
+void Player::commonRoutine(const vector<int>& neighbors, int numberOfNodes, const vector<unsigned char>& infectedAtNode, AgentRng& rng)
 {
     // DEAD e terminal: nao se move, nao transmite, nao transiciona.
     if (state == States::DEAD)
@@ -123,7 +123,7 @@ void Player::commonRoutine(const vector<int>& neighbors, int numberOfNodes, cons
     }
 }
 
-void Player::checkSurroundings(const vector<int>& infectedAtNode)
+void Player::checkSurroundings(const vector<unsigned char>& infectedAtNode)
 {
     if (state != States::SUSCEPTIBLE && state != States::RECOVERED)
     {

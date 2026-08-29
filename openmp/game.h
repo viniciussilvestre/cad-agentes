@@ -26,8 +26,9 @@ class Game
         int numberOfNodes;
         int numberOfRegions;
         bool isRunning;
-        vector<int> infectedAtNode;
-        vector<int> touchedNodes;
+        // Bandeira por no, e nao contagem: checkSurroundings so pergunta se ha
+        // ALGUM infectado ali. Ver buildInfectedAtNode.
+        vector<unsigned char> infectedAtNode;
         vector<Player> agents;
         vector<int> agentsPositionVector;
         vector<States> agentsStatusVector;
