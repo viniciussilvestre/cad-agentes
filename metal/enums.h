@@ -1,7 +1,10 @@
 #ifndef ENUMS_H
 #define ENUMS_H
 
-enum class States {
+// Tipo base explicito: sao cinco valores, cabem num byte. O enum atravessa a
+// fronteira host/kernel, entao a largura faz parte do contrato do MTLBuffer -
+// int aqui custaria 4 bytes por agente dos dois lados.
+enum class States : unsigned char {
     SUSCEPTIBLE = 0,
     EXPOSED = 1,
     INFECTED = 2,

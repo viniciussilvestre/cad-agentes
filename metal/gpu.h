@@ -24,8 +24,8 @@ class GpuRunner
                         int numberOfNodes,
                         const vector<int>& neighbors,
                         const int* agentPosition,
-                        const int* agentState,
-                        const int* agentCounter,
+                        const unsigned char* agentState,
+                        const unsigned char* agentCounter,
                         unsigned int baseSeed);
 
         // Um turno inteiro: limpa infectedAtNode, marca os nos com infectado e
@@ -37,7 +37,7 @@ class GpuRunner
         // MESMA memoria que os kernels escrevem. Ler daqui depois de runTurn()
         // nao copia nada e nao passa por barramento nenhum.
         [[nodiscard]] const int* positions() const;
-        [[nodiscard]] const int* states() const;
+        [[nodiscard]] const unsigned char* states() const;
 
     private:
         struct Impl;

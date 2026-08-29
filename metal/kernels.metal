@@ -39,7 +39,7 @@ struct StepParams
 //
 // O resultado da simulacao e identico ao da CPU, que conta: os dois so sao
 // consultados por "> 0".
-kernel void markInfected(device const int* agentState [[buffer(0)]],
+kernel void markInfected(device const uchar* agentState [[buffer(0)]],
                          device const int* agentPosition [[buffer(1)]],
                          device atomic_int* infectedAtNode [[buffer(2)]],
                          constant StepParams& params [[buffer(3)]],
@@ -49,7 +49,7 @@ kernel void markInfected(device const int* agentState [[buffer(0)]],
     {
         return;
     }
-    if (agentState[i] != (int) States::INFECTED)
+    if (agentState[i] != (uchar) States::INFECTED)
     {
         return;
     }
@@ -65,8 +65,8 @@ kernel void markInfected(device const int* agentState [[buffer(0)]],
 // sincronizacao, nenhum atomico: os ids sao disjuntos e neighbors/infectedAtNode
 // sao somente leitura durante o kernel.
 kernel void stepAgents(device int* agentPosition [[buffer(0)]],
-                       device int* agentState [[buffer(1)]],
-                       device int* agentCounter [[buffer(2)]],
+                       device uchar* agentState [[buffer(1)]],
+                       device uchar* agentCounter [[buffer(2)]],
                        device const int* neighbors [[buffer(3)]],
                        device const int* infectedAtNode [[buffer(4)]],
                        constant StepParams& params [[buffer(5)]],
@@ -77,10 +77,10 @@ kernel void stepAgents(device int* agentPosition [[buffer(0)]],
         return;
     }
 
-    int state = agentState[i];
+    uchar state = agentState[i];
 
     // DEAD e terminal: nao se move, nao transmite, nao transiciona.
-    if (state == (int) States::DEAD)
+    if (state == (uchar) States::DEAD)
     {
         return;
     }
@@ -97,25 +97,27 @@ kernel void stepAgents(device int* agentPosition [[buffer(0)]],
 
     // Contato. Uma transicao por turno: quem acaba de ser exposto nao avanca a
     // incubacao no mesmo turno, e por isso sai aqui sem gastar o sorteio 1.
-    if (state == (int) States::SUSCEPTIBLE || state == (int) States::RECOVERED)
+    if (state == (uchar) States::SUSCEPTIBLE || state == (uchar) States::RECOVERED)
     {
         if (infectedAtNode[position] > 0)
         {
-            agentState[i] = (int) States::EXPOSED;
+            agentState[i] = (uchar) States::EXPOSED;
             agentCounter[i] = 0;
         }
         return;
     }
 
     // EXPOSED ou INFECTED: avanca o cronograma da doenca.
-    int counter = agentCounter[i] + 1;
+    // Lido como int para comparar com exposedTime/deathTime, gravado como
+    // byte: o contador zera em toda transicao e nunca passa de 7.
+    int counter = (int) agentCounter[i] + 1;
     uint probability = rng.next();
 
-    if (state == (int) States::EXPOSED)
+    if (state == (uchar) States::EXPOSED)
     {
         if (probability < params.infectionThreshold)
         {
-            agentState[i] = (int) States::INFECTED;
+            agentState[i] = (uchar) States::INFECTED;
             agentCounter[i] = 0;
             return;
         }
@@ -123,28 +125,28 @@ kernel void stepAgents(device int* agentPosition [[buffer(0)]],
         {
             // A janela fechou sem a infeccao pegar: volta a ser suscetivel e
             // pode ser exposto de novo num turno seguinte.
-            agentState[i] = (int) States::SUSCEPTIBLE;
+            agentState[i] = (uchar) States::SUSCEPTIBLE;
             agentCounter[i] = 0;
             return;
         }
-        agentCounter[i] = counter;
+        agentCounter[i] = (uchar) counter;
         return;
     }
 
     // DEAD e terminal, e o return aqui e o que impede a ressurreicao.
     if (probability < params.mortalityThreshold)
     {
-        agentState[i] = (int) States::DEAD;
+        agentState[i] = (uchar) States::DEAD;
         agentCounter[i] = 0;
         return;
     }
 
     if (counter == params.deathTime)
     {
-        agentState[i] = (int) States::RECOVERED;
+        agentState[i] = (uchar) States::RECOVERED;
         agentCounter[i] = 0;
         return;
     }
 
-    agentCounter[i] = counter;
+    agentCounter[i] = (uchar) counter;
 }
