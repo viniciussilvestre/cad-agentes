@@ -3,8 +3,11 @@
 # binarios e objetos gerados pelo Makefile
 GameC
 GameC_omp
+GameC_metal
 runTests
 runTests_omp
+kernels.metallib
+*.air
 genGraph
 *.o
 
