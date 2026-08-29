@@ -29,9 +29,11 @@ class Game
         // Bandeira por no, e nao contagem: checkSurroundings so pergunta se ha
         // ALGUM infectado ali. Ver buildInfectedAtNode.
         vector<unsigned char> infectedAtNode;
-        vector<Player> agents;
+        // Estado dos agentes em SoA, 6 bytes por agente. Nao existe vetor de
+        // objetos: o agente e um indice. Ver player.h.
         vector<int> agentsPositionVector;
         vector<States> agentsStatusVector;
+        vector<unsigned char> agentsInfectionCounter;
         vector<vector<int>> nodes;
         vector<vector<int>> edges;
         vector<vector<int>> graphCoords;
@@ -54,7 +56,6 @@ class Game
         static uint64_t hashSeed(unsigned int seed, int id, int turn);
         void checkConservation(const vector<int>& counts) const;
         void initializeGame(const string& fileName = "A1100a.txt");
-        void initiateThreads(int numberOfThreads, States state);
         void remapNodes();
         int claimSlot(int node, int preferredSlot);
         void startAllDumbThreads();

@@ -111,7 +111,7 @@ static bool testUniformStationary()
     for (int turn = 0; turn < TURNS; turn++)
     {
         game.step();
-        visits[game.agents[0].position]++;
+        visits[game.agentsPositionVector[0]]++;
     }
     remove(mapFile.c_str());
 
@@ -158,7 +158,7 @@ static bool testLaziness()
     vector<int> initialParity(AGENTS);
     for (int i = 0; i < AGENTS; i++)
     {
-        initialParity[i] = gridParity(game.agents[i].position, WIDTH);
+        initialParity[i] = gridParity(game.agentsPositionVector[i], WIDTH);
     }
 
     int turnsWithBothParities = 0;
@@ -171,7 +171,7 @@ static bool testLaziness()
         int currentByParity[2] = {0, 0};
         for (int i = 0; i < AGENTS; i++)
         {
-            int position = game.agents[i].position;
+            int position = game.agentsPositionVector[i];
             currentByParity[gridParity(position, WIDTH)]++;
             atNodeByInitialParity[position * 2 + initialParity[i]]++;
         }
@@ -225,10 +225,14 @@ static bool testTwoGamesAreIndependent()
     second.initializeGame(mapFile);
     second.startAllDumbThreads();
 
-    bool idsInRange = true;
-    for (const Player& agent : second.agents)
+    // O id de um agente e a sua posicao nos vetores consolidados do proprio
+    // jogo. O que se verifica aqui e que o segundo jogo indexa os proprios
+    // vetores: tamanho certo e toda posicao dentro do grafo dele.
+    bool idsInRange = ((int) second.agentsStatusVector.size() == HEALTHY + INFECTED)
+                   && ((int) second.agentsPositionVector.size() == HEALTHY + INFECTED);
+    for (int position : second.agentsPositionVector)
     {
-        if (agent.id < 0 || agent.id >= (int) second.agentsStatusVector.size())
+        if (position < 0 || position >= second.numberOfNodes)
         {
             idsInRange = false;
         }
@@ -258,7 +262,7 @@ static bool testTwoGamesAreIndependent()
     bool passed = idsInRange && identical && conserved;
     cout << "testTwoGamesAreIndependent: 2 jogos, " << (HEALTHY + INFECTED) << " agentes cada, "
          << TURNS << " turnos" << endl;
-    cout << "  ids do segundo jogo dentro de [0, " << second.agentsStatusVector.size() << ")"
+    cout << "  o segundo jogo indexa os proprios vetores, " << second.agentsStatusVector.size() << " agentes"
          << "  ->  " << (idsInRange ? "ok" : "FALHOU") << endl;
     cout << "  mesma semente da as mesmas contagens em todo turno  ->  "
          << (identical ? "ok" : "FALHOU") << endl;

@@ -22,6 +22,7 @@ Game::Game(int initialNumberHealthy, int initialNumberInfected)
     baseSeed = Constants::DEFAULT_SEED;
     agentsPositionVector.assign((initialNumberHealthy + initialNumberInfected), 0);
     agentsStatusVector.assign((initialNumberHealthy + initialNumberInfected), States::SUSCEPTIBLE);
+    agentsInfectionCounter.assign((initialNumberHealthy + initialNumberInfected), 0);
     this->initialNumberHealthy = initialNumberHealthy;
     this->initialNumberInfected = initialNumberInfected;
 }
@@ -42,25 +43,37 @@ void Game::setCsvOutput(const string& fileName)
     csvFileName = fileName;
 }
 
-void Game::initiateThreads(int numberOfThreads, States state)
-{
-    for (int i = 0; i < numberOfThreads; i++)
-    {
-        // agents e a unica dona dos agentes: o id e a posicao na qual o agente
-        // entra no vetor, entao serve de indice direto nos vetores consolidados.
-        int playerId = (int) agents.size();
-        int startNode = (state == States::INFECTED) ? generateInfectedLocation(playerId) : generateLocation(playerId);
-        agents.emplace_back(playerId, startNode, state, this);
-        Player& player = agents.back();
-        agentsPositionVector[player.id] = player.position;
-        agentsStatusVector[player.id] = player.state;
-    }
-}
-
 void Game::startAllDumbThreads()
 {
-    initiateThreads(initialNumberHealthy, States::SUSCEPTIBLE);
-    initiateThreads(initialNumberInfected, States::INFECTED);
+    // Os ids sao 0..N-1 e a posicao inicial e funcao pura do id, entao o setup
+    // tambem e paralelo. Antes era um emplace_back serial de 100 milhoes de
+    // objetos - alocacao, crescimento do vetor e copia, tudo em uma thread.
+    //
+    // Os suscetiveis vem primeiro e os infectados depois, como antes: o RNG e
+    // indexado pelo id, entao trocar a ordem daria outro fluxo a cada agente.
+    //
+    // As checagens de limite da semeadura sao feitas aqui fora porque
+    // generateInfectedLocation aborta com exit() em caso de erro, e sair de
+    // dentro de uma regiao paralela nao e forma de reportar problema de
+    // configuracao.
+    if (initialNumberInfected > 0)
+    {
+        (void) generateInfectedLocation(0);
+    }
+
+    int numberOfAgents = initialNumberHealthy + initialNumberInfected;
+    #pragma omp parallel for schedule(static)
+    for (int id = 0; id < numberOfAgents; id++)
+    {
+        bool infected = (id >= initialNumberHealthy);
+        agentsPositionVector[id] = infected ? generateInfectedLocation(id) : generateLocation(id);
+        agentsStatusVector[id] = infected ? States::INFECTED : States::SUSCEPTIBLE;
+        // O contador mede turnos no estado atual e zera em toda transicao, entao
+        // vale zero tanto para quem nasce SUSCEPTIBLE quanto para quem nasce
+        // INFECTED - este ultimo comeca a fase infecciosa do zero, como qualquer
+        // outro que acabou de adoecer.
+        agentsInfectionCounter[id] = 0;
+    }
 }
 
 int Game::generateLocation(int id) const
@@ -416,14 +429,13 @@ void Game::buildInfectedAtNode()
     fill(infectedAtNode.begin(), infectedAtNode.end(), 0);
 
     // DEAD nunca e INFECTED, entao nao transmite nem conta como contato.
-    int numberOfAgents = (int) agents.size();
+    int numberOfAgents = (int) agentsStatusVector.size();
     #pragma omp parallel for schedule(static)
-    for (int i = 0; i < numberOfAgents; i++)
+    for (int id = 0; id < numberOfAgents; id++)
     {
-        const Player& agent = agents[i];
-        if (agent.state == States::INFECTED && infectedAtNode[agent.position] == 0)
+        if (agentsStatusVector[id] == States::INFECTED && infectedAtNode[agentsPositionVector[id]] == 0)
         {
-            infectedAtNode[agent.position] = 1;
+            infectedAtNode[agentsPositionVector[id]] = 1;
         }
     }
 }
@@ -509,17 +521,17 @@ void Game::step()
     //
     // static e a pior com 10 threads justamente porque os E-cores seguram a
     // barreira. guided fica perto do melhor nas duas colunas, entao e o padrao.
-    int numberOfAgents = (int) agents.size();
+    int numberOfAgents = (int) agentsStatusVector.size();
     #pragma omp parallel for schedule(guided)
-    for (int i = 0; i < numberOfAgents; i++)
+    for (int id = 0; id < numberOfAgents; id++)
     {
-        Player& agent = agents[i];
-        if (agent.state == States::DEAD)
+        if (agentsStatusVector[id] == States::DEAD)
         {
             continue;
         }
-        AgentRng rng = agentEngine(agent.id, turns);
-        agent.commonRoutine(neighbors, numberOfNodes, infectedAtNode, rng);
+        AgentRng rng = agentEngine(id, turns);
+        agentTurn(id, neighbors, numberOfNodes, infectedAtNode,
+                  agentsPositionVector, agentsStatusVector, agentsInfectionCounter, rng);
     }
     turns++;
 }
@@ -552,10 +564,10 @@ void Game::run(int numberOfTurns)
 
 void Game::reset()
 {
-    agents.clear();
     fill(infectedAtNode.begin(), infectedAtNode.end(), 0);
     fill(agentsPositionVector.begin(), agentsPositionVector.end(), 0);
     fill(agentsStatusVector.begin(), agentsStatusVector.end(), States::SUSCEPTIBLE);
+    fill(agentsInfectionCounter.begin(), agentsInfectionCounter.end(), 0);
     turns = 0;
     isRunning = false;
 }
