@@ -2,8 +2,12 @@
 #PBS -N pandemic_single
 #PBS -o pandemic_single.out
 #PBS -j oe
-#PBS -l select=1:ncpus=1:mem=80gb:host=compute-1-1
+#PBS -l select=1:ncpus=1:mem=80gb:host=compute-1-0
 #PBS -l walltime=10:00:00
 
 cd $PBS_O_WORKDIR
+time ./GameC
+time ./GameC
+time ./GameC
+time ./GameC
 time ./GameC
