@@ -21,6 +21,7 @@ Game::Game(int initialNumberHealthy, int initialNumberInfected)
     baseSeed = Constants::DEFAULT_SEED;
     agentsPositionVector.assign((initialNumberHealthy + initialNumberInfected), 0);
     agentsStatusVector.assign((initialNumberHealthy + initialNumberInfected), States::SUSCEPTIBLE);
+    agentsInfectionCounter.assign((initialNumberHealthy + initialNumberInfected), 0);
     this->initialNumberHealthy = initialNumberHealthy;
     this->initialNumberInfected = initialNumberInfected;
 }
@@ -41,25 +42,36 @@ void Game::setCsvOutput(const string& fileName)
     csvFileName = fileName;
 }
 
-void Game::initiateThreads(int numberOfThreads, States state)
-{
-    for (int i = 0; i < numberOfThreads; i++)
-    {
-        // agents e a unica dona dos agentes: o id e a posicao na qual o agente
-        // entra no vetor, entao serve de indice direto nos vetores consolidados.
-        int playerId = (int) agents.size();
-        int startNode = (state == States::INFECTED) ? generateInfectedLocation(playerId) : generateLocation(playerId);
-        agents.emplace_back(playerId, startNode, state, this);
-        Player& player = agents.back();
-        agentsPositionVector[player.id] = player.position;
-        agentsStatusVector[player.id] = player.state;
-    }
-}
-
 void Game::startAllDumbThreads()
 {
-    initiateThreads(initialNumberHealthy, States::SUSCEPTIBLE);
-    initiateThreads(initialNumberInfected, States::INFECTED);
+    // Os ids sao 0..N-1 e a posicao inicial e funcao pura do id, entao o setup
+    // e um laco direto sobre os vetores. Antes era um emplace_back de 100
+    // milhoes de objetos - alocacao, crescimento do vetor e copia.
+    //
+    // Os suscetiveis vem primeiro e os infectados depois, como antes: o RNG e
+    // indexado pelo id, entao trocar a ordem daria outro fluxo a cada agente.
+    //
+    // As checagens de limite da semeadura sao feitas de uma vez aqui, e nao a
+    // cada agente: a versao OpenMP precisa disso porque generateInfectedLocation
+    // aborta com exit() e sair de dentro de uma regiao paralela nao e forma de
+    // reportar problema de configuracao. As duas versoes seguem iguais.
+    if (initialNumberInfected > 0)
+    {
+        (void) generateInfectedLocation(0);
+    }
+
+    int numberOfAgents = initialNumberHealthy + initialNumberInfected;
+    for (int id = 0; id < numberOfAgents; id++)
+    {
+        bool infected = (id >= initialNumberHealthy);
+        agentsPositionVector[id] = infected ? generateInfectedLocation(id) : generateLocation(id);
+        agentsStatusVector[id] = infected ? States::INFECTED : States::SUSCEPTIBLE;
+        // O contador mede turnos no estado atual e zera em toda transicao, entao
+        // vale zero tanto para quem nasce SUSCEPTIBLE quanto para quem nasce
+        // INFECTED - este ultimo comeca a fase infecciosa do zero, como qualquer
+        // outro que acabou de adoecer.
+        agentsInfectionCounter[id] = 0;
+    }
 }
 
 int Game::generateLocation(int id) const
@@ -386,33 +398,35 @@ void Game::initializeGame(const string& fileName)
     }
 
     infectedAtNode.assign(numberOfNodes, 0);
-    touchedNodes.clear();
 
     remapNodes();
 }
 
 void Game::buildInfectedAtNode()
 {
-    // Zera so os nos escritos no turno anterior. Com numberOfNodes muito maior
-    // que o numero de agentes, limpar o vetor inteiro custaria mais que o
-    // trabalho util (40.000 nos contra alguns milhares de agentes).
-    for (int node : touchedNodes)
-    {
-        infectedAtNode[node] = 0;
-    }
-    touchedNodes.clear();
+    // Bandeira, e nao contagem. checkSurroundings so pergunta se ha ALGUM
+    // infectado no no (player.cpp), nunca quantos - entao guardar a contagem
+    // era trabalho jogado fora.
+    //
+    // Aqui, sozinho, isso valeria pouco. A forma existe para que esta versao e
+    // a OpenMP facam exatamente o mesmo trabalho por agente: la a contagem era
+    // o que obrigava a passada a ser serial (`infectedAtNode[pos]++` de varias
+    // threads exige atomico), e a bandeira e o que a liberou. Comparar as duas
+    // so diz alguma coisa se o unico ponto diferente for o numero de threads.
+    // Pelo mesmo motivo o `if` antes da escrita fica: la ele evita a tempestade
+    // de coerencia, aqui e uma leitura de uma linha que a escrita ja traria.
+    //
+    // touchedNodes morreu junto: zerar o vetor inteiro e uma passada de
+    // numberOfNodes bytes, irrelevante perto de numberOfAgents.
+    fill(infectedAtNode.begin(), infectedAtNode.end(), 0);
 
-    // Uma unica passada sobre agents. DEAD nunca e INFECTED, entao nao
-    // transmite nem conta como contato.
-    for (const Player& agent : agents)
+    // DEAD nunca e INFECTED, entao nao transmite nem conta como contato.
+    int numberOfAgents = (int) agentsStatusVector.size();
+    for (int id = 0; id < numberOfAgents; id++)
     {
-        if (agent.state == States::INFECTED)
+        if (agentsStatusVector[id] == States::INFECTED && infectedAtNode[agentsPositionVector[id]] == 0)
         {
-            if (infectedAtNode[agent.position] == 0)
-            {
-                touchedNodes.emplace_back(agent.position);
-            }
-            infectedAtNode[agent.position]++;
+            infectedAtNode[agentsPositionVector[id]] = 1;
         }
     }
 }
@@ -459,15 +473,33 @@ void Game::checkConservation(const vector<int>& counts) const
 
 void Game::step()
 {
+    // O retrato dos infectados precisa estar pronto antes de qualquer agente
+    // comecar a ler: quem se move neste turno nao muda o que os outros
+    // enxergam.
     buildInfectedAtNode();
-    for (Player& agent : agents)
+
+    // Este e o laco que a versao OpenMP paraleliza. Ele e paralelizavel por
+    // construcao, nao por acaso:
+    //
+    // - o RNG e indexado por (id do agente, turno), nunca por um fluxo
+    //   sequencial compartilhado, entao os sorteios de um agente nao dependem
+    //   da ordem em que os agentes rodam;
+    // - cada agente so escreve no slot id dos vetores consolidados, e os ids
+    //   sao disjuntos;
+    // - neighbors e infectedAtNode sao somente leitura durante o laco.
+    //
+    // Por isso as duas versoes dao a mesma saida com qualquer numero de
+    // threads. Se deixarem de dar, ha race na outra.
+    int numberOfAgents = (int) agentsStatusVector.size();
+    for (int id = 0; id < numberOfAgents; id++)
     {
-        if (agent.state == States::DEAD)
+        if (agentsStatusVector[id] == States::DEAD)
         {
             continue;
         }
-        AgentRng rng = agentEngine(agent.id, turns);
-        agent.commonRoutine(neighbors, numberOfNodes, infectedAtNode, rng);
+        AgentRng rng = agentEngine(id, turns);
+        agentTurn(id, neighbors, numberOfNodes, infectedAtNode,
+                  agentsPositionVector, agentsStatusVector, agentsInfectionCounter, rng);
     }
     turns++;
 }
@@ -484,7 +516,7 @@ void Game::run(int numberOfTurns)
     cout << "turno,S,E,I,R,D" << endl;
     vector<int> counts = countStates();
     checkConservation(counts);
-    
+
     cout << turns << "," << counts[static_cast<int>(States::SUSCEPTIBLE)]
         << "," << counts[static_cast<int>(States::EXPOSED)]
         << "," << counts[static_cast<int>(States::INFECTED)]
@@ -500,11 +532,10 @@ void Game::run(int numberOfTurns)
 
 void Game::reset()
 {
-    agents.clear();
     fill(infectedAtNode.begin(), infectedAtNode.end(), 0);
-    touchedNodes.clear();
     fill(agentsPositionVector.begin(), agentsPositionVector.end(), 0);
     fill(agentsStatusVector.begin(), agentsStatusVector.end(), States::SUSCEPTIBLE);
+    fill(agentsInfectionCounter.begin(), agentsInfectionCounter.end(), 0);
     turns = 0;
     isRunning = false;
 }
