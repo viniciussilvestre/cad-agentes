@@ -5,9 +5,9 @@
 
 int main(int argc, char** argv)
 {
-    int initialNumberHealthy = 239000;
-    int initialNumberInfected = 1000;
-    int numberOfTurns = 650;
+    int initialNumberHealthy = 90000000;
+    int initialNumberInfected = 10000000;
+    int numberOfTurns = 1200;
     unsigned int seed = Constants::DEFAULT_SEED;
     string mapFile = "map.txt";
     string csvFile;

@@ -488,7 +488,6 @@ void Game::run(int numberOfTurns)
         csvFile << "turno,regiao,S,E,I,R,D" << endl;
     }
 
-    cout << "turno,S,E,I,R,D" << endl;
     // Cronometra so o step(): o custo do CSV e do cout nao diz nada sobre o
     // ganho de paralelizar o laco de agentes.
     double stepSeconds = 0.0;
@@ -498,14 +497,6 @@ void Game::run(int numberOfTurns)
         step();
         chrono::steady_clock::time_point after = chrono::steady_clock::now();
         stepSeconds += chrono::duration<double>(after - before).count();
-
-        vector<int> counts = countStates();
-        checkConservation(counts);
-        cout << turns << "," << counts[static_cast<int>(States::SUSCEPTIBLE)]
-             << "," << counts[static_cast<int>(States::EXPOSED)]
-             << "," << counts[static_cast<int>(States::INFECTED)]
-             << "," << counts[static_cast<int>(States::RECOVERED)]
-             << "," << counts[static_cast<int>(States::DEAD)] << endl;
 
         if (csvFile.is_open())
         {
@@ -523,6 +514,15 @@ void Game::run(int numberOfTurns)
             }
         }
     }
+    cout << "turno,S,E,I,R,D" << endl;
+    vector<int> counts = countStates();
+    checkConservation(counts);
+    
+    cout << turns << "," << counts[static_cast<int>(States::SUSCEPTIBLE)]
+            << "," << counts[static_cast<int>(States::EXPOSED)]
+            << "," << counts[static_cast<int>(States::INFECTED)]
+            << "," << counts[static_cast<int>(States::RECOVERED)]
+            << "," << counts[static_cast<int>(States::DEAD)] << endl;
     isRunning = false;
 
     // Metrica unica de desempenho, comparavel entre versoes e entre escalas.
