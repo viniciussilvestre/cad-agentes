@@ -3,7 +3,7 @@
 #PBS -o pandemic_omp.out
 #PBS -j oe
 #PBS -l select=1:ncpus=128:mem=80gb:host=compute-1-1
-#PBS -l walltime=10:00:00
+#PBS -l walltime=20:00:00
 
 cd $PBS_O_WORKDIR
 time ./GameC_omp

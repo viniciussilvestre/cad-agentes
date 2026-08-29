@@ -475,63 +475,27 @@ void Game::step()
 void Game::run(int numberOfTurns)
 {
     isRunning = true;
-
-    ofstream csvFile;
-    if (!csvFileName.empty())
-    {
-        csvFile.open(csvFileName);
-        if (!csvFile.is_open())
-        {
-            cerr << "Erro: nao foi possivel escrever o CSV em '" << csvFileName << "'." << endl;
-            exit(EXIT_FAILURE);
-        }
-        csvFile << "turno,regiao,S,E,I,R,D" << endl;
-    }
-
-    // Cronometra so o step(): o custo do CSV e do cout nao diz nada sobre o
-    // ganho de paralelizar o laco de agentes.
-    double stepSeconds = 0.0;
+    chrono::steady_clock::time_point before = chrono::steady_clock::now();
+    double time = 0.0;
     for (int turn = 0; turn < numberOfTurns; turn++)
     {
-        chrono::steady_clock::time_point before = chrono::steady_clock::now();
         step();
-        chrono::steady_clock::time_point after = chrono::steady_clock::now();
-        stepSeconds += chrono::duration<double>(after - before).count();
-
-        if (csvFile.is_open())
-        {
-            vector<int> regionCounts = countStatesByRegion();
-            // A invariante tambem precisa valer somada sobre as regioes.
-            checkConservation(regionCounts);
-            for (int region = 0; region < numberOfRegions; region++)
-            {
-                csvFile << turns << "," << region
-                        << "," << regionCounts[region * 5 + static_cast<int>(States::SUSCEPTIBLE)]
-                        << "," << regionCounts[region * 5 + static_cast<int>(States::EXPOSED)]
-                        << "," << regionCounts[region * 5 + static_cast<int>(States::INFECTED)]
-                        << "," << regionCounts[region * 5 + static_cast<int>(States::RECOVERED)]
-                        << "," << regionCounts[region * 5 + static_cast<int>(States::DEAD)] << "\n";
-            }
-        }
     }
     cout << "turno,S,E,I,R,D" << endl;
     vector<int> counts = countStates();
     checkConservation(counts);
     
     cout << turns << "," << counts[static_cast<int>(States::SUSCEPTIBLE)]
-            << "," << counts[static_cast<int>(States::EXPOSED)]
-            << "," << counts[static_cast<int>(States::INFECTED)]
-            << "," << counts[static_cast<int>(States::RECOVERED)]
-            << "," << counts[static_cast<int>(States::DEAD)] << endl;
+        << "," << counts[static_cast<int>(States::EXPOSED)]
+        << "," << counts[static_cast<int>(States::INFECTED)]
+        << "," << counts[static_cast<int>(States::RECOVERED)]
+        << "," << counts[static_cast<int>(States::DEAD)] << endl;
     isRunning = false;
 
-    // Metrica unica de desempenho, comparavel entre versoes e entre escalas.
-    // Sai em cerr, e nao em cout, porque o stdout e comparado byte a byte
-    // contra o golden.
-    double elapsed = (stepSeconds > 1e-9) ? stepSeconds : 1e-9;
-    double agentTurns = (double) agents.size() * (double) numberOfTurns;
-    cerr << "passo: " << fixed << setprecision(3) << elapsed << " s   "
-         << setprecision(0) << (agentTurns / elapsed) << " agentes*turnos/s" << endl;
+    chrono::steady_clock::time_point after = chrono::steady_clock::now();
+    time = chrono::duration<double>(after - before).count();
+    double elapsed = (time > 1e-9) ? time : 1e-9;
+    cerr << "tempo: " << fixed << setprecision(3) << elapsed << " s   "<< endl;
 }
 
 void Game::reset()
