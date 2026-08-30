@@ -9,6 +9,8 @@ runTests_omp
 kernels.metallib
 *.air
 genGraph
+genGraph_mpi
+map_*.txt
 *.o
 
 # saida do cmake
