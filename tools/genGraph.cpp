@@ -4,6 +4,19 @@
 // (destino com probabilidade proporcional a 1/d^2, d = distancia de Manhattan
 // em celulas), respeitando um teto de grau de 6 arestas por no.
 //
+// Gera N grafos de uma vez, um arquivo por grafo:
+//
+//   map_0.txt, map_1.txt, ...
+//
+// Os grafos sao independentes entre si - nenhum dado e compartilhado - entao a
+// geracao e dividida entre processos ou threads sem nenhuma sincronizacao:
+//
+//   mpirun -n 8 ./genGraph_mpi --graphs 8    um grafo por rank
+//   ./genGraph --graphs 8                    um grafo por thread OpenMP
+//
+// A semente de cada grafo e seed + indice do grafo. Sem isso os N grafos
+// sairiam identicos, que e o oposto do que ter varios ambientes serve.
+//
 // Formato de saida:
 //   <nNos> <nArestas> <nRegioes>
 //   <linha em branco>
@@ -23,9 +36,14 @@
 #include <iostream>
 #include <queue>
 #include <random>
+#include <sstream>
 #include <string>
 #include <unordered_set>
 #include <vector>
+
+#ifdef USE_MPI
+#include <mpi.h>
+#endif
 
 using namespace std;
 
@@ -37,6 +55,18 @@ static const int MAX_DEGREE = 6;
 static const int SHORTCUT_SLOTS = 2;
 // Tentativas de sortear um destino que caia dentro da grade.
 static const int MAX_ATTEMPTS = 30;
+
+struct GraphConfig
+{
+    int width = 10000;
+    int height = 10000;
+    double shortcuts = 0.01;
+    int regionsX = 5;
+    int regionsY = 2;
+    int spacing = 100;
+    int jitter = 40;
+    unsigned int seed = 42;
+};
 
 // Numa grade o numero de nos a distancia exata d e aproximadamente 4d, entao
 // P(d) proporcional a 4d * (1/d^2) = 1/d. Amostrar d desta cumulativa e depois
@@ -104,77 +134,34 @@ static int farthestNode(const vector<int>& distance)
     return best;
 }
 
-int main(int argc, char** argv)
+// Gera um grafo inteiro e escreve o arquivo. Nao imprime nada: o relatorio sai
+// em report, para ser impresso de uma vez so por quem chamou.
+//
+// Toda a memoria e local - adjacencia, graus, conjunto de arestas. E o que
+// permite rodar varias chamadas destas em paralelo sem nenhuma trava: dois
+// grafos nao tem um byte em comum.
+static bool generateGraph(const GraphConfig& config, const string& outputFile, string& report)
 {
-    int width = 10000;
-    int height = 10000;
-    double shortcuts = 0.01;
-    int regionsX = 5;
-    int regionsY = 2;
-    int spacing = 100;
-    int jitter = 40;
-    unsigned int seed = 42;
-    string outputFile = "map.txt";
+    ostringstream out;
 
-    for (int i = 1; i < argc; i++)
-    {
-        string flag = argv[i];
-        bool hasValue = (i + 1 < argc);
-        if (flag == "--width" && hasValue) { width = atoi(argv[++i]); }
-        else if (flag == "--height" && hasValue) { height = atoi(argv[++i]); }
-        else if (flag == "--shortcuts" && hasValue) { shortcuts = atof(argv[++i]); }
-        else if (flag == "--regions-x" && hasValue) { regionsX = atoi(argv[++i]); }
-        else if (flag == "--regions-y" && hasValue) { regionsY = atoi(argv[++i]); }
-        else if (flag == "--spacing" && hasValue) { spacing = atoi(argv[++i]); }
-        else if (flag == "--jitter" && hasValue) { jitter = atoi(argv[++i]); }
-        else if (flag == "--seed" && hasValue) { seed = (unsigned int) strtoul(argv[++i], nullptr, 10); }
-        else if (flag == "--out" && hasValue) { outputFile = argv[++i]; }
-        else
-        {
-            cerr << "Erro: flag desconhecida ou sem valor: '" << flag << "'." << endl;
-            return EXIT_FAILURE;
-        }
-    }
-
-    if (width < 1 || height < 1)
-    {
-        cerr << "Erro: --width e --height precisam ser >= 1." << endl;
-        return EXIT_FAILURE;
-    }
-    if (regionsX < 1 || regionsY < 1 || regionsX > width || regionsY > height)
-    {
-        cerr << "Erro: --regions-x/--regions-y precisam estar entre 1 e a dimensao correspondente." << endl;
-        return EXIT_FAILURE;
-    }
-    if (shortcuts < 0.0 || shortcuts > 1.0)
-    {
-        cerr << "Erro: --shortcuts precisa estar em [0, 1]." << endl;
-        return EXIT_FAILURE;
-    }
-    if (jitter < 0)
-    {
-        cerr << "Erro: --jitter precisa ser >= 0." << endl;
-        return EXIT_FAILURE;
-    }
-
-    int numberOfNodes = width * height;
-    int numberOfRegions = regionsX * regionsY;
-    mt19937 rng(seed);
+    int numberOfNodes = config.width * config.height;
+    int numberOfRegions = config.regionsX * config.regionsY;
+    mt19937 rng(config.seed);
 
     // Coordenadas e regiao de cada no.
     vector<int> coordinateX(numberOfNodes);
     vector<int> coordinateY(numberOfNodes);
     vector<int> nodeRegion(numberOfNodes);
-    uniform_int_distribution<int> jitterDistribution(-jitter, jitter);
+    uniform_int_distribution<int> jitterDistribution(-config.jitter, config.jitter);
     for (int i = 0; i < numberOfNodes; i++)
     {
-        int row = i / width;
-        int column = i % width;
-        coordinateX[i] = column * spacing + jitterDistribution(rng);
-        coordinateY[i] = row * spacing + jitterDistribution(rng);
-        int regionColumn = (int) ((long long) column * regionsX / width);
-        int regionRow = (int) ((long long) row * regionsY / height);
-        nodeRegion[i] = regionRow * regionsX + regionColumn;
+        int row = i / config.width;
+        int column = i % config.width;
+        coordinateX[i] = column * config.spacing + jitterDistribution(rng);
+        coordinateY[i] = row * config.spacing + jitterDistribution(rng);
+        int regionColumn = (int) ((long long) column * config.regionsX / config.width);
+        int regionRow = (int) ((long long) row * config.regionsY / config.height);
+        nodeRegion[i] = regionRow * config.regionsX + regionColumn;
     }
 
     vector<vector<int>> adjacency(numberOfNodes);
@@ -184,7 +171,7 @@ int main(int argc, char** argv)
     // Arestas de grade.
     for (int i = 0; i < numberOfNodes; i++)
     {
-        if (i % width != width - 1)
+        if (i % config.width != config.width - 1)
         {
             adjacency[i].push_back(i + 1);
             adjacency[i + 1].push_back(i);
@@ -192,20 +179,20 @@ int main(int argc, char** argv)
             degree[i + 1]++;
             edgeKeys.insert((long long) i * numberOfNodes + (i + 1));
         }
-        if (i + width < numberOfNodes)
+        if (i + config.width < numberOfNodes)
         {
-            adjacency[i].push_back(i + width);
-            adjacency[i + width].push_back(i);
+            adjacency[i].push_back(i + config.width);
+            adjacency[i + config.width].push_back(i);
             degree[i]++;
-            degree[i + width]++;
-            edgeKeys.insert((long long) i * numberOfNodes + (i + width));
+            degree[i + config.width]++;
+            edgeKeys.insert((long long) i * numberOfNodes + (i + config.width));
         }
     }
 
     // Atalhos de longo alcance.
     int shortcutsCreated = 0;
     int shortcutsRejected = 0;
-    int maxDistance = width + height - 2;
+    int maxDistance = config.width + config.height - 2;
     if (maxDistance < 1)
     {
         maxDistance = 1;
@@ -218,7 +205,7 @@ int main(int argc, char** argv)
     {
         for (int slot = 0; slot < SHORTCUT_SLOTS; slot++)
         {
-            if (slotDraw(rng) >= shortcuts)
+            if (slotDraw(rng) >= config.shortcuts)
             {
                 continue;
             }
@@ -227,8 +214,8 @@ int main(int argc, char** argv)
                 shortcutsRejected++;
                 continue;
             }
-            int row = i / width;
-            int column = i % width;
+            int row = i / config.width;
+            int column = i % config.width;
             for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++)
             {
                 int distance = sampleDistance(cumulative, rng);
@@ -239,11 +226,11 @@ int main(int argc, char** argv)
                 if (signDraw(rng) == 1) { deltaY = -deltaY; }
                 int targetColumn = column + deltaX;
                 int targetRow = row + deltaY;
-                if (targetColumn < 0 || targetColumn >= width || targetRow < 0 || targetRow >= height)
+                if (targetColumn < 0 || targetColumn >= config.width || targetRow < 0 || targetRow >= config.height)
                 {
                     continue;
                 }
-                int target = targetRow * width + targetColumn;
+                int target = targetRow * config.width + targetColumn;
                 if (target == i)
                 {
                     continue;
@@ -277,8 +264,8 @@ int main(int argc, char** argv)
     ofstream output(outputFile);
     if (!output.is_open())
     {
-        cerr << "Erro: nao foi possivel escrever em '" << outputFile << "'." << endl;
-        return EXIT_FAILURE;
+        report = "Erro: nao foi possivel escrever em '" + outputFile + "'.\n";
+        return false;
     }
 
     int numberOfEdges = (int) edgeKeys.size();
@@ -335,23 +322,164 @@ int main(int argc, char** argv)
     vector<int> secondSweep = bfsDistances(adjacency, source);
     int diameter = secondSweep[farthestNode(secondSweep)];
 
-    cerr << "arquivo: " << outputFile << "\n";
-    cerr << "grade: " << width << "x" << height << "  spacing=" << spacing << "  jitter=" << jitter
-         << "  seed=" << seed << "\n";
-    cerr << "nos: " << numberOfNodes << "\n";
-    cerr << "arestas: " << numberOfEdges << "\n";
-    cerr << "grau medio: " << fixed << setprecision(3)
-         << (numberOfNodes > 0 ? (double) degreeSum / (double) numberOfNodes : 0.0) << "\n";
-    cerr << "grau minimo: " << minimumDegree << "  grau maximo: " << maximumDegree << "\n";
-    cerr << "atalhos criados: " << shortcutsCreated << "  rejeitados: " << shortcutsRejected << "\n";
-    cerr << "regioes: " << numberOfRegions << " (" << regionsX << "x" << regionsY << ")\n";
-    cerr << "conexo: " << (connected ? "sim" : "NAO") << "\n";
-    cerr << "diametro estimado (BFS de varredura dupla): " << diameter << "\n";
+    out << "arquivo: " << outputFile << "\n";
+    out << "grade: " << config.width << "x" << config.height << "  spacing=" << config.spacing
+        << "  jitter=" << config.jitter << "  seed=" << config.seed << "\n";
+    out << "nos: " << numberOfNodes << "\n";
+    out << "arestas: " << numberOfEdges << "\n";
+    out << "grau medio: " << fixed << setprecision(3)
+        << (numberOfNodes > 0 ? (double) degreeSum / (double) numberOfNodes : 0.0) << "\n";
+    out << "grau minimo: " << minimumDegree << "  grau maximo: " << maximumDegree << "\n";
+    out << "atalhos criados: " << shortcutsCreated << "  rejeitados: " << shortcutsRejected << "\n";
+    out << "regioes: " << numberOfRegions << " (" << config.regionsX << "x" << config.regionsY << ")\n";
+    out << "conexo: " << (connected ? "sim" : "NAO") << "\n";
+    out << "diametro estimado (BFS de varredura dupla): " << diameter << "\n";
     if (!connected)
     {
-        cerr << "AVISO: o grafo saiu desconexo (" << reached << " de " << numberOfNodes
-             << " nos alcancados a partir do no 0). O arquivo foi gerado mesmo assim." << endl;
+        out << "AVISO: o grafo saiu desconexo (" << reached << " de " << numberOfNodes
+            << " nos alcancados a partir do no 0). O arquivo foi gerado mesmo assim.\n";
     }
+
+    report = out.str();
+    return true;
+}
+
+int main(int argc, char** argv)
+{
+    int rank = 0;
+    int worldSize = 1;
+
+#ifdef USE_MPI
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &worldSize);
+#endif
+
+    GraphConfig config;
+    // Por padrao, um grafo por processo: com mpirun -n 8 saem 8 grafos sem
+    // precisar repetir o numero na linha de comando. Sem MPI, um grafo.
+    int numberOfGraphs = worldSize;
+    string outputPrefix = "map_";
+
+    for (int i = 1; i < argc; i++)
+    {
+        string flag = argv[i];
+        bool hasValue = (i + 1 < argc);
+        if (flag == "--width" && hasValue) { config.width = atoi(argv[++i]); }
+        else if (flag == "--height" && hasValue) { config.height = atoi(argv[++i]); }
+        else if (flag == "--shortcuts" && hasValue) { config.shortcuts = atof(argv[++i]); }
+        else if (flag == "--regions-x" && hasValue) { config.regionsX = atoi(argv[++i]); }
+        else if (flag == "--regions-y" && hasValue) { config.regionsY = atoi(argv[++i]); }
+        else if (flag == "--spacing" && hasValue) { config.spacing = atoi(argv[++i]); }
+        else if (flag == "--jitter" && hasValue) { config.jitter = atoi(argv[++i]); }
+        else if (flag == "--seed" && hasValue) { config.seed = (unsigned int) strtoul(argv[++i], nullptr, 10); }
+        else if (flag == "--graphs" && hasValue) { numberOfGraphs = atoi(argv[++i]); }
+        else if (flag == "--out-prefix" && hasValue) { outputPrefix = argv[++i]; }
+        else
+        {
+            if (rank == 0)
+            {
+                cerr << "Erro: flag desconhecida ou sem valor: '" << flag << "'." << endl;
+            }
+#ifdef USE_MPI
+            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+#endif
+            return EXIT_FAILURE;
+        }
+    }
+
+    bool valid = true;
+    string problem;
+    if (config.width < 1 || config.height < 1)
+    {
+        problem = "Erro: --width e --height precisam ser >= 1.";
+        valid = false;
+    }
+    else if (config.regionsX < 1 || config.regionsY < 1 || config.regionsX > config.width || config.regionsY > config.height)
+    {
+        problem = "Erro: --regions-x/--regions-y precisam estar entre 1 e a dimensao correspondente.";
+        valid = false;
+    }
+    else if (config.shortcuts < 0.0 || config.shortcuts > 1.0)
+    {
+        problem = "Erro: --shortcuts precisa estar em [0, 1].";
+        valid = false;
+    }
+    else if (config.jitter < 0)
+    {
+        problem = "Erro: --jitter precisa ser >= 0.";
+        valid = false;
+    }
+    else if (numberOfGraphs < 1)
+    {
+        problem = "Erro: --graphs precisa ser >= 1.";
+        valid = false;
+    }
+
+    if (!valid)
+    {
+        if (rank == 0)
+        {
+            cerr << problem << endl;
+        }
+#ifdef USE_MPI
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+#endif
+        return EXIT_FAILURE;
+    }
+
+    // Divisao circular: o grafo g fica com o processo g % worldSize. Com
+    // --graphs igual ao numero de processos, e um grafo por processo; com mais
+    // grafos que processos, cada um pega varios. Nada precisa ser combinado
+    // entre eles, porque nao ha nada compartilhado.
+    int failures = 0;
+
+#ifdef USE_MPI
+    for (int graph = rank; graph < numberOfGraphs; graph += worldSize)
+    {
+        GraphConfig local = config;
+        // Semente propria por grafo, senao os N sairiam identicos.
+        local.seed = config.seed + (unsigned int) graph;
+        string report;
+        if (!generateGraph(local, outputPrefix + to_string(graph) + ".txt", report))
+        {
+            failures++;
+        }
+        // Um unico << por relatorio: com varios processos escrevendo em cerr,
+        // montar a saida linha a linha misturaria os relatorios.
+        cerr << report << flush;
+    }
+
+    int totalFailures = 0;
+    MPI_Reduce(&failures, &totalFailures, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Finalize();
+    if (rank == 0 && totalFailures > 0)
+    {
+        return EXIT_FAILURE;
+    }
+#else
+    // Sem MPI os grafos saem em threads OpenMP quando o binario foi compilado
+    // com -fopenmp, e em sequencia quando nao. O laco e o mesmo nos dois casos:
+    // as iteracoes nao compartilham nada.
+    #pragma omp parallel for schedule(static) reduction(+:failures)
+    for (int graph = 0; graph < numberOfGraphs; graph++)
+    {
+        GraphConfig local = config;
+        local.seed = config.seed + (unsigned int) graph;
+        string report;
+        if (!generateGraph(local, outputPrefix + to_string(graph) + ".txt", report))
+        {
+            failures++;
+        }
+        #pragma omp critical
+        cerr << report << flush;
+    }
+
+    if (failures > 0)
+    {
+        return EXIT_FAILURE;
+    }
+#endif
 
     return EXIT_SUCCESS;
 }

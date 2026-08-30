@@ -233,6 +233,34 @@ a marca do ultimo turno processado: pular quem ja andou no turno corrente
 elimina o turno duplo e devolve o determinismo, ao custo de 100 MB com 100
 milhoes de agentes.
 
+## 8. Geracao de varios grafos: MPI ou OpenMP
+
+Os N grafos nao compartilham um byte, entao a geracao divide sem nenhuma
+sincronizacao. Duas versoes do mesmo fonte:
+
+    ./genGraph --graphs 8                     threads OpenMP
+    mpirun -n 8 ./genGraph_mpi                um processo por grafo
+
+Os arquivos saem **byte a byte identicos** nas duas, porque a semente de cada
+grafo e `seed + indice`, e nao depende de quem gerou nem da ordem.
+
+**local**, 4 grafos de 600x600 (360.000 nos cada):
+
+| | tempo |
+|---|---|
+| serial (1 thread) | 2,77 s |
+| OpenMP, 4 threads | 0,90 s |
+| MPI, `-n 4` | 1,61 s |
+
+Numa maquina so o OpenMP ganha: o `mpirun` paga criacao de processo e nao ha
+memoria a ganhar com espacos de endereco separados. O MPI vale quando a
+geracao passa de uma maquina - ai a mesma linha de comando distribui entre
+nos, o que o OpenMP nao faz.
+
+Com mais grafos do que processos, a divisao e circular (`grafo % ranks`), e
+cada processo gera varios. Conferido: `mpirun -n 4 --graphs 8` produz os oito
+arquivos.
+
 ---
 
 ## Ambiente CUDA (bloqueios conhecidos)

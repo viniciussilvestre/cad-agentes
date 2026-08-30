@@ -17,6 +17,16 @@ else
   HAVE_METAL =
 endif
 
+# MPI: o mpicxx raramente esta no PATH em instalacao local, entao procura
+# tambem o prefixo comum. Para sobrescrever: make genGraph_mpi MPICXX=mpicxx
+MPICXX     ?= $(shell command -v mpicxx 2>/dev/null || echo /opt/openmpi/bin/mpicxx)
+HAVE_MPICXX := $(shell test -x "$(MPICXX)" && echo 1)
+ifeq ($(HAVE_MPICXX),1)
+  MPI_TARGET = genGraph_mpi
+else
+  MPI_TARGET =
+endif
+
 MTL_SRCS  = metal/main.cpp metal/game.cpp
 MTL_HDRS  = metal/game.h metal/enums.h metal/constants.h metal/rng.h metal/gpu.h
 MTL_FRAME = -framework Metal -framework Foundation
@@ -34,7 +44,7 @@ BASE_HDRS = base/simulation.h base/game.h base/player.h base/pool.h base/enums.h
 OMP_SRCS  = openmp/main.cpp openmp/simulation.cpp openmp/game.cpp openmp/player.cpp
 OMP_HDRS  = openmp/simulation.h openmp/game.h openmp/player.h openmp/pool.h openmp/enums.h openmp/constants.h
 
-all: GameC GameC_omp $(METAL_TARGETS) $(GENERATOR)
+all: GameC GameC_omp $(METAL_TARGETS) $(GENERATOR) $(MPI_TARGET)
 
 # Cada versao compila da propria pasta, sem fonte compartilhada: se uma quebrar,
 # a outra continua de pe.
@@ -67,8 +77,14 @@ kernels.metallib GameC_metal:
 
 endif
 
+# Os N grafos sao independentes, entao o gerador sai em duas versoes a partir
+# do mesmo fonte: threads OpenMP, ou um processo MPI por grafo. A escolha e de
+# quem roda, e nao do codigo - o laco e o mesmo nos dois casos.
 $(GENERATOR): tools/genGraph.cpp
-	$(CXX) $(CXXFLAGS) -o $@ tools/genGraph.cpp
+	$(CXX) $(CXXFLAGS) $(OMPFLAGS) -o $@ tools/genGraph.cpp $(OMPLIBS)
+
+genGraph_mpi: tools/genGraph.cpp
+	$(MPICXX) $(CXXFLAGS) -DUSE_MPI -o $@ tools/genGraph.cpp
 
 # O mesmo tests.cpp roda contra as duas versoes; quem escolhe e o -I.
 runTests: tests/tests.cpp base/simulation.cpp base/game.cpp base/player.cpp $(BASE_HDRS)
@@ -95,6 +111,6 @@ endif
 
 clean:
 	rm -f GameC GameC_omp GameC_metal kernels.metallib runTests runTests_omp \
-	      $(GENERATOR) base/*.o openmp/*.o metal/*.air
+	      $(GENERATOR) genGraph_mpi base/*.o openmp/*.o metal/*.air
 
 .PHONY: all run test golden clean
