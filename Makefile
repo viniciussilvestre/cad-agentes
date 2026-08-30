@@ -17,6 +17,20 @@ else
   HAVE_METAL =
 endif
 
+# CUDA: o nvcc raramente esta no PATH. CUDA_ARCH precisa bater com a placa -
+# sm_61 Pascal (Quadro P6000), sm_80 Ampere (A100), sm_90 Hopper. Toolkits a
+# partir do 13 nao geram mais codigo para Pascal nem Volta, entao o 12.x e o
+# que cobre placa antiga e A100 ao mesmo tempo.
+# Para sobrescrever: make genGraph_cuda CUDA_ARCH=sm_80
+NVCC      ?= $(shell command -v nvcc 2>/dev/null || echo /usr/local/cuda/bin/nvcc)
+CUDA_ARCH ?= sm_61
+HAVE_NVCC := $(shell test -x "$(NVCC)" && echo 1)
+ifeq ($(HAVE_NVCC),1)
+  CUDA_TARGET = genGraph_cuda
+else
+  CUDA_TARGET =
+endif
+
 # MPI: o mpicxx raramente esta no PATH em instalacao local, entao procura
 # tambem o prefixo comum. Para sobrescrever: make genGraph_mpi MPICXX=mpicxx
 MPICXX     ?= $(shell command -v mpicxx 2>/dev/null || echo /opt/openmpi/bin/mpicxx)
@@ -44,7 +58,7 @@ BASE_HDRS = base/simulation.h base/game.h base/player.h base/pool.h base/enums.h
 OMP_SRCS  = openmp/main.cpp openmp/simulation.cpp openmp/game.cpp openmp/player.cpp
 OMP_HDRS  = openmp/simulation.h openmp/game.h openmp/player.h openmp/pool.h openmp/enums.h openmp/constants.h
 
-all: GameC GameC_omp $(METAL_TARGETS) $(GENERATOR) $(MPI_TARGET)
+all: GameC GameC_omp $(METAL_TARGETS) $(GENERATOR) $(MPI_TARGET) $(CUDA_TARGET)
 
 # Cada versao compila da propria pasta, sem fonte compartilhada: se uma quebrar,
 # a outra continua de pe.
@@ -86,6 +100,11 @@ $(GENERATOR): tools/genGraph.cpp
 genGraph_mpi: tools/genGraph.cpp
 	$(MPICXX) $(CXXFLAGS) -DUSE_MPI -o $@ tools/genGraph.cpp
 
+# A construcao do grafo vai para a GPU; a emissao do arquivo continua na CPU,
+# que e onde esta a maior parte do tempo. Ver docs/medicoes.md.
+genGraph_cuda: tools/genGraph.cu
+	$(NVCC) -std=c++17 -O2 -arch=$(CUDA_ARCH) -o $@ tools/genGraph.cu -Xcompiler "-Wall -Wextra"
+
 # O mesmo tests.cpp roda contra as duas versoes; quem escolhe e o -I.
 runTests: tests/tests.cpp base/simulation.cpp base/game.cpp base/player.cpp $(BASE_HDRS)
 	$(CXX) $(CXXFLAGS) -Ibase -o $@ tests/tests.cpp base/simulation.cpp base/game.cpp base/player.cpp
@@ -111,6 +130,6 @@ endif
 
 clean:
 	rm -f GameC GameC_omp GameC_metal kernels.metallib runTests runTests_omp \
-	      $(GENERATOR) genGraph_mpi base/*.o openmp/*.o metal/*.air
+	      $(GENERATOR) genGraph_mpi genGraph_cuda base/*.o openmp/*.o metal/*.air
 
 .PHONY: all run test golden clean
