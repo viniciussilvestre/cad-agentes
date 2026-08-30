@@ -102,8 +102,19 @@ genGraph_mpi: tools/genGraph.cpp
 
 # A construcao do grafo vai para a GPU; a emissao do arquivo continua na CPU,
 # que e onde esta a maior parte do tempo. Ver docs/medicoes.md.
+#
+# CUDA_CCBIN existe porque o nvcc so aceita GCC ate certa versao (14, no 12.9)
+# e a distribuicao pode ter uma mais nova como padrao. Se g++-14 estiver
+# instalado, usa ele; senao deixa o nvcc escolher.
+CUDA_CCBIN ?= $(shell command -v g++-14 2>/dev/null)
+ifneq ($(CUDA_CCBIN),)
+  NVCCBIN = -ccbin $(CUDA_CCBIN)
+else
+  NVCCBIN =
+endif
+
 genGraph_cuda: tools/genGraph.cu
-	$(NVCC) -std=c++17 -O2 -arch=$(CUDA_ARCH) -o $@ tools/genGraph.cu -Xcompiler "-Wall -Wextra"
+	$(NVCC) -std=c++17 -O2 -arch=$(CUDA_ARCH) $(NVCCBIN) -o $@ tools/genGraph.cu -Xcompiler "-Wall -Wextra"
 
 # O mesmo tests.cpp roda contra as duas versoes; quem escolhe e o -I.
 runTests: tests/tests.cpp base/simulation.cpp base/game.cpp base/player.cpp $(BASE_HDRS)

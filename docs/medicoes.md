@@ -313,17 +313,109 @@ Projecao para o padrao 10000x10000 (100 milhoes de nos, ~200 milhoes de
 arestas): cerca de **5,5 GB por arquivo**, contra ~6,9 GB antes. Com
 `--graphs 64` sao ~350 GB de disco - vale conferir a cota antes de disparar.
 
+### Onde o tempo do gerador vai
+
+Perfilado com 2000x2000 (4 milhoes de nos), antes e depois de trocar o
+escritor:
+
+| fase | antes | depois |
+|---|---|---|
+| 1 coords/regiao | 0,18 s | 0,19 s |
+| 2 arestas de grade | 0,08 s | 0,08 s |
+| 3 atalhos | 0,09 s | 0,09 s |
+| 4 escrita do arquivo | 1,69 s | **0,33 s** |
+| 5 relatorio/BFS | 0,57 s | 0,59 s (opcional) |
+
+Construir o grafo eram 0,35 s de 2,61 s - 13%. **Era a escrita que dominava**,
+e formatar inteiro pelo ostream era quase toda ela: a mao, o mesmo conteudo sai
+5,1x mais rapido.
+
+Isso decide o que vale acelerar. Com a escrita custando 65%, levar a geracao
+para a GPU dava no maximo 1,15x por Amdahl, mesmo que a geracao custasse zero.
+Com o escritor novo e `--no-report`, a geracao passa a ser mais da metade do
+que sobra, e ai a GPU tem o que ganhar.
+
+Tempo de parede, 2000x2000: 3,00 s -> 2,26 s -> 1,37 s com `--no-report`.
+
+## 9. genGraph_cuda
+
+Uma thread por no nas tres fases de construcao. A emissao do arquivo continua
+na CPU - GPU nao escreve arquivo.
+
+Duas diferencas obrigatorias em relacao a versao de CPU:
+
+- **RNG.** O mt19937 e sequencial e carrega 2,5 KB de estado. Foi trocado pelo
+  splitmix64 indexado por (semente, no, indice), o mesmo do jogo. Por isso
+  `genGraph_cuda` **nao produz os mesmos arquivos** que `genGraph` com a mesma
+  semente: mesmas propriedades, grafos diferentes.
+
+- **Atalhos.** Na CPU os nos sao processados em ordem e cada aresta criada muda
+  o grau visto pelos proximos. Em paralelo a disputa vira rodadas: cada destino
+  fica com a proposta do menor id que o quer (atomicMin, independe da ordem das
+  threads), e quem recebe nao envia na mesma rodada. O grau sobe no maximo 1
+  por no por rodada, entao nunca estoura o teto sem precisar reservar as duas
+  pontas de uma aresta de forma atomica.
+
+  A decisao fica em kernel separado da aplicacao. Juntos, uma thread escreveria
+  degree[i] enquanto outra o le para avaliar o predicado do emissor, e as duas
+  pontas da mesma aresta poderiam discordar.
+
+### Estado da verificacao
+
+O algoritmo foi validado rodando os kernels serialmente (os lacos sao
+grid-stride, entao com gridDim=1/blockDim=1 uma thread percorre tudo), com
+300x300:
+
+| verificacao | resultado |
+|---|---|
+| cabecalho x conteudo | 90.000 nos e 180.851 arestas, batem |
+| teto de grau | maximo 6, respeitado |
+| simetria da adjacencia | as duas pontas se veem |
+| conectividade | 90.000 de 90.000 alcancados |
+| regioes | 10 regioes de 9.000 nos |
+| determinismo | mesma semente da o mesmo arquivo |
+| semente diferente | da grafo diferente |
+| leitura pelo jogo | mapa carrega e simula normalmente |
+
+O que **nao** foi verificado: execucao real na GPU. Ver abaixo.
+
 ---
 
 ## Ambiente CUDA (bloqueios conhecidos)
 
 Nao sao medicoes, sao impedimentos que ja custaram tempo:
 
-- **local**: nvcc 13.1 nao compila nenhum `.cu`. glibc 2.43 declara `rsqrt`
-  com `noexcept` e o `crt/math_functions.h` do CUDA declara sem, o que da
-  `error: exception specification is incompatible` ate num arquivo vazio.
-- **local**: CUDA 13 removeu Pascal. A P6000 e sm_61 e o nvcc recusa
-  (`Unsupported gpu architecture 'sm_61'`).
-- **servidor**: a V100 e sm_70, tambem removida no CUDA 13. Conferir com
-  `nvcc --list-gpu-arch` antes de comecar; se `compute_70` nao aparecer, e
-  preciso um toolkit CUDA 12.x.
+Esta maquina **nao compila nenhum `.cu`**, com nenhum dos dois toolkits
+instalados. Vale ate para um arquivo com um kernel vazio e zero includes - nao
+e problema do nosso codigo.
+
+A causa e a glibc 2.43, mais nova que os dois toolkits. Ela declara um punhado
+de funcoes de C23 (`cospi`, `sinpi`, `rsqrt`) com `noexcept`, e o
+`crt/math_functions.h` do CUDA declara as mesmas sem, o que da
+`error: exception specification is incompatible`. O `cuda_runtime.h` e
+pre-incluido em todo `.cu`, entao nao ha como escapar.
+
+| toolkit | situacao |
+|---|---|
+| CUDA 13.1 | guarda `sinpi`/`cospi`, mas nao `rsqrt` - falha. E removeu Pascal e Volta, entao nem sm_61 nem sm_70 |
+| CUDA 12.9 | nao tem guarda nenhuma - falha nas tres. Cobre sm_50 ate sm_90 |
+
+Tentado e sem efeito: `-allow-unsupported-compiler`, `-U_GNU_SOURCE`,
+`-D__STDC_WANT_IEC_60559_FUNCS_EXT__`, e um cabecalho de `-include` que
+neutraliza `__USE_GNU` antes do `math.h` (chega tarde: o `cuda_runtime.h` ja
+foi pre-incluido).
+
+O `-ccbin g++-14` resolve **outro** problema, esse sim real: o CUDA 12.9 aceita
+GCC ate 14 e a maquina tem g++-15 como padrao. E necessario, mas nao
+suficiente.
+
+Saidas possiveis, em ordem de esforco:
+
+1. Compilar no servidor. Distribuicao de cluster costuma ter glibc bem mais
+   antiga, e ai o 12.x compila sem nada disso.
+2. Container com glibc antiga (docker e podman estao instalados aqui, mas sem
+   imagem CUDA local - seriam alguns GB de download).
+3. Esperar um CUDA que complete a guarda das tres funcoes.
+
+Para o servidor: a A100 e sm_80, coberta pelo CUDA 12.x.
+`make genGraph_cuda CUDA_ARCH=sm_80`.
