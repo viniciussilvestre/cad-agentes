@@ -334,7 +334,7 @@ void Game::initializeGame(const string& fileName)
         copy(istream_iterator<string>(iss3), istream_iterator<string>(), back_inserter(values));
         if (values.size() < 2) {
             cerr << "Erro: linha de aresta invalida em '" << fileName << "' (linha " << (i + 1)
-                 << "): esperado 'origem destino peso'." << endl;
+                 << "): esperado 'origem destino'." << endl;
             exit(EXIT_FAILURE);
         }
         int source_node = stoi(values[0]);

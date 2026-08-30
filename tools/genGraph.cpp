@@ -20,9 +20,16 @@
 // Formato de saida:
 //   <nNos> <nArestas> <nRegioes>
 //   <linha em branco>
-//   <x> <y> <regiao>          x nNos
+//   <x> <y> <regiao>     x nNos
 //   <linha em branco>
-//   <origem> <destino> <peso> x nArestas
+//   <origem> <destino>   x nArestas
+//
+// A aresta nao carrega peso. Ele existia como terceira coluna, era a distancia
+// euclidiana entre os dois nos, e nenhum leitor usava: os tres jogos leem
+// values[0] e values[1] e descartam o resto. Eram ~7 bytes por aresta, 20% do
+// arquivo - com 100 milhoes de nos, mais de 1 GB por grafo escrito para nada.
+// Arquivos antigos, com a coluna, continuam sendo lidos: o parser exige duas
+// colunas e ignora o que vier depois.
 //
 // Cada aresta nao-direcionada aparece uma unica vez, com origem < destino, e
 // as arestas saem ordenadas por origem crescente e contiguas por origem.
@@ -308,7 +315,6 @@ static bool generateGraph(const GraphConfig& config, const string& outputFile, s
         output << coordinateX[i] << "\t" << coordinateY[i] << "\t" << nodeRegion[i] << "\n";
     }
     output << "\n";
-    output << fixed << setprecision(2);
     for (int i = 0; i < numberOfNodes; i++)
     {
         vector<int> targets;
@@ -323,9 +329,7 @@ static bool generateGraph(const GraphConfig& config, const string& outputFile, s
         sort(targets.begin(), targets.end());
         for (int target : targets)
         {
-            double deltaX = (double) (coordinateX[target] - coordinateX[i]);
-            double deltaY = (double) (coordinateY[target] - coordinateY[i]);
-            output << i << "\t" << target << "\t" << sqrt(deltaX * deltaX + deltaY * deltaY) << "\n";
+            output << i << "\t" << target << "\n";
         }
     }
     output.close();

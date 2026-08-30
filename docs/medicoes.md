@@ -293,6 +293,26 @@ controla quantos saem juntos e `OMP_NUM_THREADS`:
 Antes desta mudanca o mesmo comando pediria 17 GB por grafo, e 64 em paralelo
 passavam de 1 TB - foi o que matou o job 182315 no PBS.
 
+### Tamanho do arquivo
+
+O arquivo e texto, entao o custo por no e dominado pelo numero de digitos dos
+indices - cresce com a escala. Medido:
+
+| grade | com coluna de peso | sem | |
+|---|---|---|---|
+| 500x500 | 12,6 MB | 9,5 MB | 39,9 bytes/no |
+| 1000x1000 | 52,3 MB | 39,6 MB | 41,5 bytes/no |
+| 2000x2000 | 226,4 MB | 175,7 MB | 46,0 bytes/no |
+
+A terceira coluna das arestas era a distancia euclidiana entre os dois nos, e
+nenhum leitor a usava: os tres jogos leem `values[0]` e `values[1]` e
+descartam o resto. Sao 22% a 25% do arquivo. Conferido que a simulacao da
+exatamente o mesmo resultado lendo o formato de duas colunas e o de tres.
+
+Projecao para o padrao 10000x10000 (100 milhoes de nos, ~200 milhoes de
+arestas): cerca de **5,5 GB por arquivo**, contra ~6,9 GB antes. Com
+`--graphs 64` sao ~350 GB de disco - vale conferir a cota antes de disparar.
+
 ---
 
 ## Ambiente CUDA (bloqueios conhecidos)
