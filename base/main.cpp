@@ -1,15 +1,18 @@
-#include "game.h"
+#include "simulation.h"
 #include "constants.h"
 #include <cstdlib>
 
 int main(int argc, char** argv)
 {
+    // --agents e --infected sao POR JOGO: com --games 4 --agents 1000, sao
+    // 4.000 agentes no total. Assim aumentar o numero de ambientes nao encolhe
+    // cada um deles.
     int initialNumberHealthy = 90000000;
     int initialNumberInfected = 10000000;
     int numberOfTurns = 1200;
+    int numberOfGames = 1;
     unsigned int seed = Constants::DEFAULT_SEED;
     string mapFile = "map.txt";
-    string csvFile;
     SeedMode seedMode = SeedMode::Uniform;
     int seedTarget = 0;
 
@@ -22,7 +25,7 @@ int main(int argc, char** argv)
         else if (flag == "--infected" && hasValue) { initialNumberInfected = atoi(argv[++i]); }
         else if (flag == "--turns" && hasValue) { numberOfTurns = atoi(argv[++i]); }
         else if (flag == "--seed" && hasValue) { seed = (unsigned int) strtoul(argv[++i], nullptr, 10); }
-        else if (flag == "--out-csv" && hasValue) { csvFile = argv[++i]; }
+        else if (flag == "--games" && hasValue) { numberOfGames = atoi(argv[++i]); }
         else if (flag == "--seed-target" && hasValue) { seedTarget = atoi(argv[++i]); }
         else if (flag == "--seed-mode" && hasValue)
         {
@@ -43,15 +46,11 @@ int main(int argc, char** argv)
         }
     }
 
-    Game game(initialNumberHealthy, initialNumberInfected);
-    game.setSeed(seed);
-    game.setSeedMode(seedMode, seedTarget);
-    if (!csvFile.empty())
-    {
-        game.setCsvOutput(csvFile);
-    }
-    game.initializeGame(mapFile);
-    game.startAllDumbThreads();
-    game.run(numberOfTurns);
+    Simulation simulation(numberOfGames, initialNumberHealthy, initialNumberInfected);
+    simulation.setSeed(seed);
+    simulation.setSeedMode(seedMode, seedTarget);
+    simulation.initialize(mapFile);
+    simulation.start();
+    simulation.run(numberOfTurns);
     return 0;
 }

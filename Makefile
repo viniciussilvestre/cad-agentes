@@ -29,10 +29,10 @@ else
   METAL_TARGETS =
 endif
 
-BASE_SRCS = base/main.cpp base/game.cpp base/player.cpp
-BASE_HDRS = base/game.h base/player.h base/enums.h base/constants.h
-OMP_SRCS  = openmp/main.cpp openmp/game.cpp openmp/player.cpp
-OMP_HDRS  = openmp/game.h openmp/player.h openmp/enums.h openmp/constants.h
+BASE_SRCS = base/main.cpp base/simulation.cpp base/game.cpp base/player.cpp
+BASE_HDRS = base/simulation.h base/game.h base/player.h base/pool.h base/enums.h base/constants.h
+OMP_SRCS  = openmp/main.cpp openmp/simulation.cpp openmp/game.cpp openmp/player.cpp
+OMP_HDRS  = openmp/simulation.h openmp/game.h openmp/player.h openmp/pool.h openmp/enums.h openmp/constants.h
 
 all: GameC GameC_omp $(METAL_TARGETS) $(GENERATOR)
 
@@ -71,11 +71,11 @@ $(GENERATOR): tools/genGraph.cpp
 	$(CXX) $(CXXFLAGS) -o $@ tools/genGraph.cpp
 
 # O mesmo tests.cpp roda contra as duas versoes; quem escolhe e o -I.
-runTests: tests/tests.cpp base/game.cpp base/player.cpp $(BASE_HDRS)
-	$(CXX) $(CXXFLAGS) -Ibase -o $@ tests/tests.cpp base/game.cpp base/player.cpp
+runTests: tests/tests.cpp base/simulation.cpp base/game.cpp base/player.cpp $(BASE_HDRS)
+	$(CXX) $(CXXFLAGS) -Ibase -o $@ tests/tests.cpp base/simulation.cpp base/game.cpp base/player.cpp
 
-runTests_omp: tests/tests.cpp openmp/game.cpp openmp/player.cpp $(OMP_HDRS)
-	$(CXX) $(CXXFLAGS) $(OMPFLAGS) -Iopenmp -o $@ tests/tests.cpp openmp/game.cpp openmp/player.cpp $(OMPLIBS)
+runTests_omp: tests/tests.cpp openmp/simulation.cpp openmp/game.cpp openmp/player.cpp $(OMP_HDRS)
+	$(CXX) $(CXXFLAGS) $(OMPFLAGS) -Iopenmp -o $@ tests/tests.cpp openmp/simulation.cpp openmp/game.cpp openmp/player.cpp $(OMPLIBS)
 
 run: GameC
 	./GameC

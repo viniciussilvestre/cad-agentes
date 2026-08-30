@@ -8,8 +8,11 @@
 #include <chrono>
 #include <iomanip>
 
-Game::Game(int initialNumberHealthy, int initialNumberInfected)
+Game::Game()
 {
+    initialNumberHealthy = 0;
+    initialNumberInfected = 0;
+    firstAgent = 0;
     turns = 0;
     isRunning = false;
     min_x_coordinate = numeric_limits<int>::max();
@@ -19,11 +22,14 @@ Game::Game(int initialNumberHealthy, int initialNumberInfected)
     numberOfNodes = 0;
     numberOfRegions = 0;
     baseSeed = Constants::DEFAULT_SEED;
-    agentsPositionVector.assign((initialNumberHealthy + initialNumberInfected), 0);
-    agentsStatusVector.assign((initialNumberHealthy + initialNumberInfected), States::SUSCEPTIBLE);
-    agentsInfectionCounter.assign((initialNumberHealthy + initialNumberInfected), 0);
-    this->initialNumberHealthy = initialNumberHealthy;
-    this->initialNumberInfected = initialNumberInfected;
+}
+
+void Game::configure(AgentPool& agentPool, int firstAgentId, int numberOfHealthy, int numberOfInfected)
+{
+    pool = &agentPool;
+    firstAgent = firstAgentId;
+    initialNumberHealthy = numberOfHealthy;
+    initialNumberInfected = numberOfInfected;
 }
 
 void Game::setSeed(unsigned int seed)
@@ -37,16 +43,16 @@ void Game::setSeedMode(SeedMode mode, int regionOrNode)
     seedTarget = regionOrNode;
 }
 
-void Game::setCsvOutput(const string& fileName)
-{
-    csvFileName = fileName;
-}
-
 void Game::startAllDumbThreads()
 {
-    // Os ids sao 0..N-1 e a posicao inicial e funcao pura do id, entao o setup
-    // e um laco direto sobre os vetores. Antes era um emplace_back de 100
-    // milhoes de objetos - alocacao, crescimento do vetor e copia.
+    // Os ids sao globais e a posicao inicial e funcao pura do id, entao o setup
+    // e um laco direto sobre o pool. Antes era um emplace_back de 100 milhoes
+    // de objetos - alocacao, crescimento do vetor e copia.
+    //
+    // Cada jogo semeia a propria faixa [firstAgent, firstAgent + n). Como o RNG
+    // e indexado pelo id GLOBAL, dois jogos com o mesmo mapa e o mesmo numero de
+    // agentes ainda assim evoluem diferente - o que se quer de ambientes
+    // independentes rodando lado a lado.
     //
     // Os suscetiveis vem primeiro e os infectados depois, como antes: o RNG e
     // indexado pelo id, entao trocar a ordem daria outro fluxo a cada agente.
@@ -57,20 +63,24 @@ void Game::startAllDumbThreads()
     // reportar problema de configuracao. As duas versoes seguem iguais.
     if (initialNumberInfected > 0)
     {
-        (void) generateInfectedLocation(0);
+        (void) generateInfectedLocation(firstAgent);
     }
 
     int numberOfAgents = initialNumberHealthy + initialNumberInfected;
-    for (int id = 0; id < numberOfAgents; id++)
+    members.resize((size_t) numberOfAgents);
+
+    for (int local = 0; local < numberOfAgents; local++)
     {
-        bool infected = (id >= initialNumberHealthy);
-        agentsPositionVector[id] = infected ? generateInfectedLocation(id) : generateLocation(id);
-        agentsStatusVector[id] = infected ? States::INFECTED : States::SUSCEPTIBLE;
+        int id = firstAgent + local;
+        bool infected = (local >= initialNumberHealthy);
+        pool->positions[id] = infected ? generateInfectedLocation(id) : generateLocation(id);
+        pool->states[id] = infected ? States::INFECTED : States::SUSCEPTIBLE;
         // O contador mede turnos no estado atual e zera em toda transicao, entao
         // vale zero tanto para quem nasce SUSCEPTIBLE quanto para quem nasce
         // INFECTED - este ultimo comeca a fase infecciosa do zero, como qualquer
         // outro que acabou de adoecer.
-        agentsInfectionCounter[id] = 0;
+        pool->counters[id] = 0;
+        members[local] = id;
     }
 }
 
@@ -420,24 +430,26 @@ void Game::buildInfectedAtNode()
     // numberOfNodes bytes, irrelevante perto de numberOfAgents.
     fill(infectedAtNode.begin(), infectedAtNode.end(), 0);
 
-    // DEAD nunca e INFECTED, entao nao transmite nem conta como contato.
-    int numberOfAgents = (int) agentsStatusVector.size();
-    for (int id = 0; id < numberOfAgents; id++)
+    // Varre so quem esta NESTE jogo. DEAD nunca e INFECTED, entao nao transmite
+    // nem conta como contato.
+    int numberOfMembers = (int) members.size();
+    for (int index = 0; index < numberOfMembers; index++)
     {
-        if (agentsStatusVector[id] == States::INFECTED && infectedAtNode[agentsPositionVector[id]] == 0)
+        int id = members[index];
+        if (pool->states[id] == States::INFECTED && infectedAtNode[pool->positions[id]] == 0)
         {
-            infectedAtNode[agentsPositionVector[id]] = 1;
+            infectedAtNode[pool->positions[id]] = 1;
         }
     }
 }
 
 vector<int> Game::countStates() const
 {
-    // Contagens tiradas da visao consolidada, nao dos agentes.
+    // So os presentes: quem viajou ja conta no jogo de destino.
     vector<int> counts(5, 0);
-    for (States state : agentsStatusVector)
+    for (int id : members)
     {
-        counts[static_cast<int>(state)]++;
+        counts[static_cast<int>(pool->states[id])]++;
     }
     return counts;
 }
@@ -447,31 +459,15 @@ vector<int> Game::countStatesByRegion() const
     // Layout: counts[regiao * 5 + estado]. A regiao de um agente e a do no em
     // que ele esta; um DEAD conta na regiao onde morreu.
     vector<int> counts((size_t) numberOfRegions * 5, 0);
-    for (int i = 0; i < (initialNumberHealthy + initialNumberInfected); i++)
+    for (int id : members)
     {
-        int region = nodeRegion[agentsPositionVector[i]];
-        counts[region * 5 + static_cast<int>(agentsStatusVector[i])]++;
+        int region = nodeRegion[pool->positions[id]];
+        counts[region * 5 + static_cast<int>(pool->states[id])]++;
     }
     return counts;
 }
 
-void Game::checkConservation(const vector<int>& counts) const
-{
-    int totalNumberOfThreads = initialNumberHealthy + initialNumberInfected;
-    int total = 0;
-    for (int count : counts)
-    {
-        total += count;
-    }
-    if (total != totalNumberOfThreads)
-    {
-        cerr << "Invariante de conservacao violada no turno " << turns << ": S+E+I+R+D = "
-             << total << " != " << totalNumberOfThreads << endl;
-        exit(EXIT_FAILURE);
-    }
-}
-
-void Game::step()
+void Game::step(int turn)
 {
     // O retrato dos infectados precisa estar pronto antes de qualquer agente
     // comecar a ler: quem se move neste turno nao muda o que os outros
@@ -484,63 +480,35 @@ void Game::step()
     // - o RNG e indexado por (id do agente, turno), nunca por um fluxo
     //   sequencial compartilhado, entao os sorteios de um agente nao dependem
     //   da ordem em que os agentes rodam;
-    // - cada agente so escreve no slot id dos vetores consolidados, e os ids
-    //   sao disjuntos;
+    // - cada agente so escreve no slot id do pool, e os ids sao disjuntos;
     // - neighbors e infectedAtNode sao somente leitura durante o laco.
     //
     // Por isso as duas versoes dao a mesma saida com qualquer numero de
     // threads. Se deixarem de dar, ha race na outra.
-    int numberOfAgents = (int) agentsStatusVector.size();
-    for (int id = 0; id < numberOfAgents; id++)
+    //
+    // O laco anda sobre members, e nao sobre a faixa de ids: com viagem entre
+    // jogos os dois deixam de coincidir, e quem manda e members.
+    int numberOfMembers = (int) members.size();
+    for (int index = 0; index < numberOfMembers; index++)
     {
-        if (agentsStatusVector[id] == States::DEAD)
+        int id = members[index];
+        if (pool->states[id] == States::DEAD)
         {
             continue;
         }
-        AgentRng rng = agentEngine(id, turns);
+        AgentRng rng = agentEngine(id, turn);
         agentTurn(id, neighbors, numberOfNodes, infectedAtNode,
-                  agentsPositionVector, agentsStatusVector, agentsInfectionCounter, rng);
+                  pool->positions, pool->states, pool->counters, rng);
     }
-    turns++;
-}
-
-void Game::run(int numberOfTurns)
-{
-    isRunning = true;
-    chrono::steady_clock::time_point before = chrono::steady_clock::now();
-    double time = 0.0;
-    for (int turn = 0; turn < numberOfTurns; turn++)
-    {
-        step();
-    }
-    cout << "turno,S,E,I,R,D" << endl;
-    vector<int> counts = countStates();
-    checkConservation(counts);
-
-    cout << turns << "," << counts[static_cast<int>(States::SUSCEPTIBLE)]
-        << "," << counts[static_cast<int>(States::EXPOSED)]
-        << "," << counts[static_cast<int>(States::INFECTED)]
-        << "," << counts[static_cast<int>(States::RECOVERED)]
-        << "," << counts[static_cast<int>(States::DEAD)] << endl;
-    isRunning = false;
-
-    chrono::steady_clock::time_point after = chrono::steady_clock::now();
-    time = chrono::duration<double>(after - before).count();
-    double elapsed = (time > 1e-9) ? time : 1e-9;
-    cerr << "tempo: " << fixed << setprecision(3) << elapsed << " s   "<< endl;
+    turns = turn + 1;
 }
 
 void Game::reset()
 {
+    // So o que e do ambiente. O pool e da Simulation, que o zera de uma vez -
+    // zerar aqui apagaria os agentes dos outros jogos.
     fill(infectedAtNode.begin(), infectedAtNode.end(), 0);
-    fill(agentsPositionVector.begin(), agentsPositionVector.end(), 0);
-    fill(agentsStatusVector.begin(), agentsStatusVector.end(), States::SUSCEPTIBLE);
-    fill(agentsInfectionCounter.begin(), agentsInfectionCounter.end(), 0);
+    members.clear();
     turns = 0;
     isRunning = false;
-}
-
-void Game::quit()
-{
-    reset();
 }
