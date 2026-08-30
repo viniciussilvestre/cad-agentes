@@ -72,6 +72,11 @@ struct GraphConfig
     int spacing = 100;
     int jitter = 40;
     unsigned int seed = 42;
+
+    // A conectividade e o diametro saem de duas varreduras BFS sobre o grafo
+    // inteiro - 22% do tempo com 2000x2000. Sao verificacao, nao producao:
+    // desligar so tira as duas ultimas linhas do relatorio.
+    bool report = true;
 };
 
 // Numa grade o numero de nos a distancia exata d e aproximadamente 4d, entao
@@ -161,6 +166,91 @@ static vector<int> bfsDistances(const vector<int>& adjacency, const vector<int>&
     }
     return distance;
 }
+
+// ---------------------------------------------------------------------------
+// Escrita do arquivo.
+//
+// Formatar inteiro em texto pelo ostream custa caro: com 2000x2000 a emissao
+// era 1,69 s de um total de 2,61 s - 65% do programa, contra 0,35 s para
+// construir o grafo inteiro. Convertendo a mao para um buffer grande e
+// despejando com fwrite, cai para 0,30 s, com saida byte a byte identica.
+//
+// Nao e microtuning: era o gargalo, e sem isso qualquer aceleracao da geracao
+// (GPU inclusive) esbarra em 1,15x por Amdahl.
+// ---------------------------------------------------------------------------
+
+// Coordenadas podem ser negativas: o jitter desloca para os dois lados, entao o
+// no 0 sai em -40 com frequencia. Sem tratar o sinal aqui o arquivo sairia
+// corrompido justamente nas bordas.
+static inline char* writeInt(char* cursor, int value)
+{
+    if (value < 0)
+    {
+        *cursor++ = '-';
+        value = -value;
+    }
+    if (value == 0)
+    {
+        *cursor++ = '0';
+        return cursor;
+    }
+    char digits[12];
+    int count = 0;
+    while (value > 0)
+    {
+        digits[count++] = (char) ('0' + value % 10);
+        value /= 10;
+    }
+    while (count > 0)
+    {
+        *cursor++ = digits[--count];
+    }
+    return cursor;
+}
+
+// Buffer de saida com despejo automatico. A margem existe para que uma linha
+// inteira caiba sempre depois da conferencia, sem testar campo a campo.
+class OutputBuffer
+{
+    public:
+        static const size_t CAPACITY = 1u << 22;   // 4 MB
+        static const size_t MARGIN = 64;           // maior linha possivel
+
+        explicit OutputBuffer(FILE* target) : file(target), storage(CAPACITY + MARGIN)
+        {
+            cursor = storage.data();
+        }
+
+        void endLine()
+        {
+            *cursor++ = '\n';
+            if ((size_t) (cursor - storage.data()) >= CAPACITY)
+            {
+                flush();
+            }
+        }
+
+        void field(int value)
+        {
+            cursor = writeInt(cursor, value);
+        }
+
+        void separator()
+        {
+            *cursor++ = '\t';
+        }
+
+        void flush()
+        {
+            fwrite(storage.data(), 1, (size_t) (cursor - storage.data()), file);
+            cursor = storage.data();
+        }
+
+    private:
+        FILE* file;
+        vector<char> storage;
+        char* cursor;
+};
 
 static int farthestNode(const vector<int>& distance)
 {
@@ -291,12 +381,13 @@ static bool generateGraph(const GraphConfig& config, const string& outputFile, s
     }
 
     // Emissao: origem crescente, contigua por origem, origem < destino.
-    ofstream output(outputFile);
-    if (!output.is_open())
+    FILE* output = fopen(outputFile.c_str(), "wb");
+    if (output == nullptr)
     {
         report = "Erro: nao foi possivel escrever em '" + outputFile + "'.\n";
         return false;
     }
+    OutputBuffer buffer(output);
 
     // Cada aresta gasta um slot nos dois extremos, entao a soma dos graus e o
     // dobro do numero de arestas. Antes esse numero saia do tamanho da tabela
@@ -308,31 +399,64 @@ static bool generateGraph(const GraphConfig& config, const string& outputFile, s
     }
     int numberOfEdges = (int) (degreeTotal / 2);
 
-    output << numberOfNodes << "\t" << numberOfEdges << "\t" << numberOfRegions << "\n";
-    output << "\n";
+    buffer.field(numberOfNodes);
+    buffer.separator();
+    buffer.field(numberOfEdges);
+    buffer.separator();
+    buffer.field(numberOfRegions);
+    buffer.endLine();
+    buffer.endLine();
+
     for (int i = 0; i < numberOfNodes; i++)
     {
-        output << coordinateX[i] << "\t" << coordinateY[i] << "\t" << nodeRegion[i] << "\n";
+        buffer.field(coordinateX[i]);
+        buffer.separator();
+        buffer.field(coordinateY[i]);
+        buffer.separator();
+        buffer.field(nodeRegion[i]);
+        buffer.endLine();
     }
-    output << "\n";
+    buffer.endLine();
+
+    // Os vizinhos de um no cabem em MAX_DEGREE, entao a ordenacao e sobre no
+    // maximo 6 elementos num vetor de pilha - sem alocacao por no.
     for (int i = 0; i < numberOfNodes; i++)
     {
-        vector<int> targets;
+        int targets[MAX_DEGREE];
+        int count = 0;
         for (int slot = 0; slot < degree[i]; slot++)
         {
             int neighbor = adjacency[neighborSlot(i, slot)];
             if (neighbor > i)
             {
-                targets.push_back(neighbor);
+                targets[count++] = neighbor;
             }
         }
-        sort(targets.begin(), targets.end());
-        for (int target : targets)
+        // Insercao direta: sao no maximo MAX_DEGREE elementos. std::sort aqui
+        // custa mais em codigo do que o laco, e ainda faz o GCC avisar de
+        // limites por causa do caminho de 16 elementos que nunca e tomado.
+        for (int a = 1; a < count; a++)
         {
-            output << i << "\t" << target << "\n";
+            int value = targets[a];
+            int b = a - 1;
+            while (b >= 0 && targets[b] > value)
+            {
+                targets[b + 1] = targets[b];
+                b--;
+            }
+            targets[b + 1] = value;
+        }
+        for (int index = 0; index < count; index++)
+        {
+            buffer.field(i);
+            buffer.separator();
+            buffer.field(targets[index]);
+            buffer.endLine();
         }
     }
-    output.close();
+
+    buffer.flush();
+    fclose(output);
 
     // Relatorio.
     int minimumDegree = degree.empty() ? 0 : degree[0];
@@ -345,20 +469,6 @@ static bool generateGraph(const GraphConfig& config, const string& outputFile, s
         degreeSum += value;
     }
 
-    vector<int> firstSweep = bfsDistances(adjacency, degree, 0);
-    int reached = 0;
-    for (int value : firstSweep)
-    {
-        if (value >= 0)
-        {
-            reached++;
-        }
-    }
-    bool connected = (reached == numberOfNodes);
-    int source = farthestNode(firstSweep);
-    vector<int> secondSweep = bfsDistances(adjacency, degree, source);
-    int diameter = secondSweep[farthestNode(secondSweep)];
-
     out << "arquivo: " << outputFile << "\n";
     out << "grade: " << config.width << "x" << config.height << "  spacing=" << config.spacing
         << "  jitter=" << config.jitter << "  seed=" << config.seed << "\n";
@@ -369,12 +479,30 @@ static bool generateGraph(const GraphConfig& config, const string& outputFile, s
     out << "grau minimo: " << minimumDegree << "  grau maximo: " << maximumDegree << "\n";
     out << "atalhos criados: " << shortcutsCreated << "  rejeitados: " << shortcutsRejected << "\n";
     out << "regioes: " << numberOfRegions << " (" << config.regionsX << "x" << config.regionsY << ")\n";
-    out << "conexo: " << (connected ? "sim" : "NAO") << "\n";
-    out << "diametro estimado (BFS de varredura dupla): " << diameter << "\n";
-    if (!connected)
+
+    if (config.report)
     {
-        out << "AVISO: o grafo saiu desconexo (" << reached << " de " << numberOfNodes
-            << " nos alcancados a partir do no 0). O arquivo foi gerado mesmo assim.\n";
+        vector<int> firstSweep = bfsDistances(adjacency, degree, 0);
+        int reached = 0;
+        for (int value : firstSweep)
+        {
+            if (value >= 0)
+            {
+                reached++;
+            }
+        }
+        bool connected = (reached == numberOfNodes);
+        int source = farthestNode(firstSweep);
+        vector<int> secondSweep = bfsDistances(adjacency, degree, source);
+        int diameter = secondSweep[farthestNode(secondSweep)];
+
+        out << "conexo: " << (connected ? "sim" : "NAO") << "\n";
+        out << "diametro estimado (BFS de varredura dupla): " << diameter << "\n";
+        if (!connected)
+        {
+            out << "AVISO: o grafo saiu desconexo (" << reached << " de " << numberOfNodes
+                << " nos alcancados a partir do no 0). O arquivo foi gerado mesmo assim.\n";
+        }
     }
 
     report = out.str();
@@ -412,6 +540,7 @@ int main(int argc, char** argv)
         else if (flag == "--seed" && hasValue) { config.seed = (unsigned int) strtoul(argv[++i], nullptr, 10); }
         else if (flag == "--graphs" && hasValue) { numberOfGraphs = atoi(argv[++i]); }
         else if (flag == "--out-prefix" && hasValue) { outputPrefix = argv[++i]; }
+        else if (flag == "--no-report") { config.report = false; }
         else
         {
             if (rank == 0)
