@@ -36,8 +36,7 @@ class Simulation
         // Liga os dois niveis de paralelismo: os ambientes por fora, os agentes
         // de cada um por dentro. Desligado por padrao, e uma escolha explicita
         // como o numero de threads - o certo depende de quantos jogos ha para
-        // dividir entre as threads, e a tabela de medicoes esta em
-        // docs/medicoes.md.
+        // dividir entre as threads. Tabela em docs/medicoes.md.
         void setNestedParallelism(bool enabled);
 
         // Mesma semente para todos os jogos.

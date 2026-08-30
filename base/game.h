@@ -39,8 +39,27 @@ class Game
         AgentPool* pool = nullptr;
 
         // Ids globais presentes neste jogo neste momento. E o unico lugar que a
-        // viagem entre jogos precisa mexer.
+        // viagem entre jogos mexe.
+        //
+        // Tamanho FIXO, alocado uma vez em startAllDumbThreads:
+        //
+        //   capacidade = agentes + agentes / TRAVEL_CAPACITY_DIVISOR
+        //
+        // Nunca cresce. Um push_back de um agente chegando reallocaria o vetor
+        // debaixo do laco que esta percorrendo esta lista, e esse laco passaria
+        // a ler memoria liberada - o que trava ou corrompe, e nao e a corrida
+        // inofensiva de "o agente entra no turno que vem". Com capacidade fixa
+        // nada muda de lugar, e o pior caso e uma viagem recusada.
+        //
+        // memberCount marca o fim util. Os slots de quem viajou ficam com -1
+        // ate a compactacao no fim do turno.
         vector<int> members;
+        int memberCount = 0;
+
+        // Todos os ambientes, para a viagem saber onde entregar o agente, e o
+        // indice deste jogo dentro deles.
+        vector<Game>* world = nullptr;
+        int gameIndex = 0;
         vector<vector<int>> nodes;
         vector<vector<int>> edges;
         vector<vector<int>> graphCoords;
@@ -80,6 +99,19 @@ class Game
         // por (id, turno), e um agente que viaja tem que continuar no mesmo
         // turno do outro lado.
         void step(int turn);
+
+        // Tenta mover o agente para outro jogo. Devolve true se conseguiu, e
+        // nesse caso o slot de origem ja foi marcado com -1.
+        bool travel(int id, int memberIndex, AgentRng& rng);
+
+        // Reserva um slot no fim da lista deste jogo para um agente que esta
+        // chegando. Devolve -1 se a lista encheu, e ai a viagem e recusada.
+        int claimMemberSlot();
+
+        // Tira os -1 deixados por quem viajou. Roda entre turnos, quando
+        // ninguem esta percorrendo a lista.
+        void compactMembers();
+
         void reset();
 
     private:

@@ -67,7 +67,12 @@ void Game::startAllDumbThreads()
     }
 
     int numberOfAgents = initialNumberHealthy + initialNumberInfected;
-    members.resize((size_t) numberOfAgents);
+
+    // Capacidade fixa, com folga para receber viajantes. Alocada aqui e nunca
+    // mais mexida: e o que permite que um jogo escreva na lista de outro
+    // enquanto o dono dela a percorre.
+    members.assign((size_t) (numberOfAgents + numberOfAgents / Constants::TRAVEL_CAPACITY_DIVISOR), -1);
+    memberCount = numberOfAgents;
 
     for (int local = 0; local < numberOfAgents; local++)
     {
@@ -80,6 +85,7 @@ void Game::startAllDumbThreads()
         // INFECTED - este ultimo comeca a fase infecciosa do zero, como qualquer
         // outro que acabou de adoecer.
         pool->counters[id] = 0;
+        pool->travelLock[id] = 0;
         members[local] = id;
     }
 }
@@ -432,10 +438,11 @@ void Game::buildInfectedAtNode()
 
     // Varre so quem esta NESTE jogo. DEAD nunca e INFECTED, entao nao transmite
     // nem conta como contato.
-    int numberOfMembers = (int) members.size();
+    int numberOfMembers = memberCount;
     for (int index = 0; index < numberOfMembers; index++)
     {
         int id = members[index];
+        if (id < 0) { continue; }
         if (pool->states[id] == States::INFECTED && infectedAtNode[pool->positions[id]] == 0)
         {
             infectedAtNode[pool->positions[id]] = 1;
@@ -447,8 +454,10 @@ vector<int> Game::countStates() const
 {
     // So os presentes: quem viajou ja conta no jogo de destino.
     vector<int> counts(5, 0);
-    for (int id : members)
+    for (int index = 0; index < memberCount; index++)
     {
+        int id = members[index];
+        if (id < 0) { continue; }
         counts[static_cast<int>(pool->states[id])]++;
     }
     return counts;
@@ -459,8 +468,10 @@ vector<int> Game::countStatesByRegion() const
     // Layout: counts[regiao * 5 + estado]. A regiao de um agente e a do no em
     // que ele esta; um DEAD conta na regiao onde morreu.
     vector<int> counts((size_t) numberOfRegions * 5, 0);
-    for (int id : members)
+    for (int index = 0; index < memberCount; index++)
     {
+        int id = members[index];
+        if (id < 0) { continue; }
         int region = nodeRegion[pool->positions[id]];
         counts[region * 5 + static_cast<int>(pool->states[id])]++;
     }
@@ -488,10 +499,20 @@ void Game::step(int turn)
     //
     // O laco anda sobre members, e nao sobre a faixa de ids: com viagem entre
     // jogos os dois deixam de coincidir, e quem manda e members.
-    int numberOfMembers = (int) members.size();
+    // numberOfMembers e lido UMA vez, antes do laco. Quem chegar durante o
+    // turno entra depois deste limite e so e processado no turno seguinte -
+    // que e o comportamento desejado: o agente ja andou uma vez neste turno,
+    // no jogo de origem, e processa-lo de novo aqui seria um turno duplo.
+    int numberOfMembers = memberCount;
     for (int index = 0; index < numberOfMembers; index++)
     {
         int id = members[index];
+        // Slot de quem viajou para ca e ja saiu de novo, ou lixo de uma
+        // compactacao ainda nao feita.
+        if (id < 0)
+        {
+            continue;
+        }
         if (pool->states[id] == States::DEAD)
         {
             continue;
@@ -499,8 +520,105 @@ void Game::step(int turn)
         AgentRng rng = agentEngine(id, turn);
         agentTurn(id, neighbors, numberOfNodes, infectedAtNode,
                   pool->positions, pool->states, pool->counters, rng);
+
+        // A viagem vem depois do turno normal e usa sorteios a partir do
+        // indice 2: agentTurn consome 0 (o slot do passeio) e as vezes 1 (a
+        // probabilidade da transicao). Fixar o indice aqui faz os sorteios de
+        // viagem nao dependerem de qual caminho o agente tomou la dentro.
+        if (world != nullptr && world->size() > 1)
+        {
+            if (pool->travelLock[id] > 0)
+            {
+                pool->travelLock[id]--;
+            }
+            else
+            {
+                rng.index = 2;
+                if (rng.next() < Constants::TRAVEL_THRESHOLD)
+                {
+                    travel(id, index, rng);
+                }
+            }
+        }
     }
     turns = turn + 1;
+}
+
+bool Game::travel(int id, int memberIndex, AgentRng& rng)
+{
+    // Sorteia entre os OUTROS jogos: tira este do baralho e desloca, em vez de
+    // sortear e repetir se cair em si mesmo - laco de rejeicao aqui seria
+    // divergencia de warp na versao de GPU, pelo mesmo motivo do passeio.
+    int numberOfGames = (int) world->size();
+    int destinationIndex = (int) rng.below((uint32_t) (numberOfGames - 1));
+    if (destinationIndex >= gameIndex)
+    {
+        destinationIndex++;
+    }
+    Game& destination = (*world)[destinationIndex];
+
+    // O destino tem o proprio mapa, entao a posicao antiga nao vale la. O
+    // agente chega num no sorteado do grafo de destino.
+    int landing = (int) rng.below((uint32_t) destination.numberOfNodes);
+
+    // Reserva o slot no destino ANTES de sair daqui. Se a lista de la estiver
+    // cheia, a viagem e recusada e o agente fica onde esta - nunca some.
+    int slot = destination.claimMemberSlot();
+    if (slot < 0)
+    {
+        return false;
+    }
+
+    destination.members[slot] = id;
+    pool->positions[id] = landing;
+    pool->travelLock[id] = (unsigned char) Constants::TRAVEL_LOCK_TURNS;
+
+    // So agora o slot de origem e liberado. Nesta ordem o agente existe nos
+    // dois lugares por um instante, e nunca em nenhum: uma contagem tirada no
+    // meio pode contar a mais, jamais a menos.
+    members[memberIndex] = -1;
+    return true;
+}
+
+int Game::claimMemberSlot()
+{
+    if (memberCount >= (int) members.size())
+    {
+        return -1;
+    }
+    int slot = memberCount;
+    memberCount++;
+    return slot;
+}
+
+void Game::compactMembers()
+{
+    // Roda entre turnos, com ninguem percorrendo a lista. Empurra os ids vivos
+    // para o inicio e encolhe memberCount; a capacidade continua a mesma.
+    //
+    // O teto e reposto aqui porque na versao OpenMP a reserva de slot
+    // incrementa antes de conferir: com a lista cheia, memberCount pode passar
+    // da capacidade por um instante. Os slots acima do teto nunca sao escritos,
+    // mas percorrer ate la seria leitura fora do vetor.
+    if (memberCount > (int) members.size())
+    {
+        memberCount = (int) members.size();
+    }
+
+    int write = 0;
+    for (int read = 0; read < memberCount; read++)
+    {
+        if (members[read] >= 0)
+        {
+            members[write] = members[read];
+            write++;
+        }
+    }
+    for (int index = write; index < memberCount; index++)
+    {
+        members[index] = -1;
+    }
+    memberCount = write;
 }
 
 void Game::reset()

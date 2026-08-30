@@ -78,6 +78,11 @@ void Simulation::initialize()
         // identidade do agente no pool: dois jogos com a mesma faixa seriam dois
         // jogos escrevendo no mesmo agente.
         games[index].configure(pool, firstAgent, healthy, infected);
+        // A viagem precisa alcancar os outros ambientes. O ponteiro e para o
+        // vetor, e nao para um elemento dele: games ja tem o tamanho final
+        // desde o construtor, entao nada realoca depois disto.
+        games[index].world = &games;
+        games[index].gameIndex = index;
         games[index].initializeGame(mapFiles[index]);
         firstAgent += healthy + infected;
     }
@@ -98,6 +103,13 @@ void Simulation::step()
     for (Game& game : games)
     {
         game.step(turns);
+    }
+
+    // Compactacao depois que TODOS os jogos andaram: durante o turno as listas
+    // estao sendo lidas e recebendo chegadas, e so aqui e seguro mexer nelas.
+    for (Game& game : games)
+    {
+        game.compactMembers();
     }
     turns++;
 }

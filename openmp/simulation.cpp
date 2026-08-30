@@ -93,6 +93,11 @@ void Simulation::initialize()
         // identidade do agente no pool: dois jogos com a mesma faixa seriam dois
         // jogos escrevendo no mesmo agente.
         games[index].configure(pool, firstAgent, healthy, infected);
+        // A viagem precisa alcancar os outros ambientes. O ponteiro e para o
+        // vetor, e nao para um elemento dele: games ja tem o tamanho final
+        // desde o construtor, entao nada realoca depois disto.
+        games[index].world = &games;
+        games[index].gameIndex = index;
         games[index].initializeGame(mapFiles[index]);
         firstAgent += healthy + infected;
     }
@@ -109,9 +114,7 @@ void Simulation::start()
 void Simulation::step()
 {
     // Dois niveis de paralelismo: os ambientes aqui, os agentes de cada um
-    // dentro de Game::step. Sao independentes - um jogo nao le nem escreve o
-    // infectedAtNode nem o members de outro, e o pool e escrito por id, que e
-    // disjunto entre jogos enquanto nao ha viagem.
+    // dentro de Game::step.
     //
     // O caso de um jogo so desvia ANTES do pragma, e nao com uma clausula
     // if(): uma regiao paralela com if falso ainda e uma regiao paralela, e as
@@ -119,8 +122,7 @@ void Simulation::step()
     // reaproveita o pool de threads quente no nivel de cima, entao aninhadas
     // elas voltam a criar e destruir threads de verdade a cada turno. Medido:
     // o conjunto de testes (500.000 turnos com 1 agente) saiu de segundos para
-    // mais de 90 s com 28 threads. Com o desvio em C++, o caminho de um jogo
-    // fica exatamente como era antes de existir Simulation.
+    // mais de 90 s com 28 threads.
     int numberOfGames = (int) games.size();
     if (numberOfGames == 1)
     {
@@ -133,6 +135,16 @@ void Simulation::step()
         {
             games[index].step(turns);
         }
+    }
+
+    // Compactacao depois que TODOS os jogos andaram: durante o turno as listas
+    // estao sendo lidas e recebendo chegadas, e so aqui e seguro mexer nelas.
+    // Esta barreira e o que torna a compactacao segura - por isso ela nao pode
+    // subir para dentro de Game::step.
+    #pragma omp parallel for schedule(static)
+    for (int index = 0; index < numberOfGames; index++)
+    {
+        games[index].compactMembers();
     }
     turns++;
 }

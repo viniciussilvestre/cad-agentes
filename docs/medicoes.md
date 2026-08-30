@@ -166,6 +166,61 @@ para **mais de 90 s** com 28 threads.
 
 Correcao: desviar em C++ antes do pragma, e nao com clausula `if`.
 
+## 7. Viagem entre jogos
+
+Lista de presentes de tamanho fixo por jogo:
+
+    capacidade = agentes + agentes / 2
+
+Nunca cresce. Um `push_back` de um agente chegando reallocaria o vetor debaixo
+do laco que outro jogo esta percorrendo, e isso nao e corrida inofensiva - e
+leitura de memoria liberada. Com capacidade fixa nada muda de lugar; o pior
+caso e uma viagem recusada por lotacao.
+
+Conferido com 42.000 agentes em 4 jogos, 60 turnos: nenhum agente perdido nem
+duplicado, com 1, 4 e 28 threads. As populacoes oscilam em torno de 10.500 por
+jogo e a soma fica exatamente em 42.000 em todo turno.
+
+### Turno duplo: a consequencia que a viagem traz
+
+Cada jogo le o tamanho da propria lista UMA vez, antes do laco. Quem chega
+depois disso so e processado no turno seguinte. Mas se o destino ainda **nao**
+andou neste turno, a chegada entra no limite dele e o agente faz um segundo
+turno completo - anda de novo e avanca a doenca de novo, com o mesmo sorteio,
+porque o RNG e indexado por (id, turno).
+
+Medido com 51.000 agentes, 100 turnos:
+
+| jogos | viagens | turnos duplos | |
+|---|---|---|---|
+| 2 | 34.667 | 17.230 | 49,7% das viagens |
+| 4 | 34.838 | 17.245 | 49,5% |
+| 8 | 35.409 | 17.497 | 49,4% |
+
+Sempre metade, e faz sentido: no sequencial os jogos andam em ordem, entao
+viajar "para frente" cai num jogo que ainda nao andou e viajar "para tras" nao.
+
+Sao 0,34% dos turnos-agente. O travelLock impede viajar duas vezes, mas nao
+impede o segundo turno.
+
+### Determinismo
+
+| | |
+|---|---|
+| 1 jogo | sequencial == OpenMP, com qualquer numero de threads |
+| N jogos, 1 thread | sequencial == OpenMP |
+| N jogos, N threads | **diverge** |
+
+Com mais de um jogo e mais de uma thread, quem ja andou quando a chegada
+acontece depende do escalonamento, entao quais agentes fazem turno duplo muda
+de execucao para execucao. A saida continua conservando os agentes, mas deixa
+de dar para testar por diff contra a sequencial.
+
+Isso foi uma escolha explicita. Para desfazer bastaria um byte por agente com
+a marca do ultimo turno processado: pular quem ja andou no turno corrente
+elimina o turno duplo e devolve o determinismo, ao custo de 100 MB com 100
+milhoes de agentes.
+
 ---
 
 ## Ambiente CUDA (bloqueios conhecidos)

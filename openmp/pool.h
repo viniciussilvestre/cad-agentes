@@ -23,11 +23,16 @@ struct AgentPool
     vector<States> states;
     vector<unsigned char> counters;
 
+    // Turnos restantes de impedimento de viagem. So o proprio agente escreve
+    // aqui, como em todo o resto do pool.
+    vector<unsigned char> travelLock;
+
     void resize(int numberOfAgents)
     {
         positions.assign((size_t) numberOfAgents, 0);
         states.assign((size_t) numberOfAgents, States::SUSCEPTIBLE);
         counters.assign((size_t) numberOfAgents, 0);
+        travelLock.assign((size_t) numberOfAgents, 0);
     }
 
     [[nodiscard]] int size() const
