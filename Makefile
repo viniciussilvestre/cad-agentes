@@ -113,8 +113,12 @@ else
   NVCCBIN =
 endif
 
-genGraph_cuda: tools/genGraph.cu
-	$(NVCC) -std=c++17 -O2 -arch=$(CUDA_ARCH) $(NVCCBIN) -o $@ tools/genGraph.cu -Xcompiler "-Wall -Wextra"
+# tools/cuda_compat entra na frente do <math.h> do sistema: a glibc 2.41+
+# declara cospi/sinpi/rsqrt com noexcept e o cabecalho do CUDA declara sem, o
+# que impede compilar qualquer .cu. Ver o comentario la dentro.
+genGraph_cuda: tools/genGraph.cu tools/cuda_compat/math.h
+	$(NVCC) -std=c++17 -O2 -arch=$(CUDA_ARCH) $(NVCCBIN) -Itools/cuda_compat \
+	        -o $@ tools/genGraph.cu -Xcompiler "-Wall -Wextra"
 
 # O mesmo tests.cpp roda contra as duas versoes; quem escolhe e o -I.
 runTests: tests/tests.cpp base/simulation.cpp base/game.cpp base/player.cpp $(BASE_HDRS)

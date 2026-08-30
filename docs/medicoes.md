@@ -360,11 +360,51 @@ Duas diferencas obrigatorias em relacao a versao de CPU:
   degree[i] enquanto outra o le para avaliar o predicado do emissor, e as duas
   pontas da mesma aresta poderiam discordar.
 
+### Desempenho: a GPU perde
+
+Um grafo por vez, na Quadro P6000:
+
+| grade | CPU 1 thread | GPU |
+|---|---|---|
+| 1000x1000 | 0,22 s | 0,89 s |
+| 2000x2000 | 0,73 s | 1,23 s |
+| 3000x3000 | 1,60 s | 1,82 s |
+| 4000x4000 | 2,77 s | 2,66 s |
+
+Oito grafos de 1500x1500, que e o caso de uso real:
+
+| | tempo |
+|---|---|
+| CPU 1 thread | 2,96 s |
+| CPU 8 threads | **0,50 s** |
+| CPU 28 threads | 0,49 s |
+| GPU | 2,83 s |
+
+**5,7x mais lenta que a versao OpenMP.** Tres motivos, todos estruturais:
+
+1. **Contexto CUDA custa 0,84 s fixos.** Medido com uma grade de 100x100, onde
+   nao ha trabalho nenhum a fazer. Com um grafo so, e mais que a geracao
+   inteira na CPU.
+
+2. **A escrita continua na CPU** e e a maior parte do tempo. GPU nao escreve
+   arquivo, e nenhum kernel muda isso.
+
+3. **A versao CUDA faz um grafo por vez**, enquanto a OpenMP faz N em paralelo.
+   Como os grafos sao independentes, a CPU tem N vezes mais paralelismo
+   disponivel do que a GPU consegue usar num grafo so.
+
+Era o que o perfil ja dizia: com a geracao valendo 13% a 28% do tempo, nao ha
+o que ganhar. A versao existe, esta correta e e deterministica - mas para
+gerar mapas, o caminho e `./genGraph --graphs N`.
+
+Onde ela poderia virar: grafos muito maiores (a A100 tem banda e L2 muito
+maiores que a P6000), ou sobrepor a escrita de um grafo com os kernels do
+proximo.
+
 ### Estado da verificacao
 
-O algoritmo foi validado rodando os kernels serialmente (os lacos sao
-grid-stride, entao com gridDim=1/blockDim=1 uma thread percorre tudo), com
-300x300:
+Compila e roda na P6000 com CUDA 12.9, `-ccbin g++-14` e o cabecalho de
+compatibilidade `tools/cuda_compat` (ver adiante). Com 300x300:
 
 | verificacao | resultado |
 |---|---|
@@ -373,11 +413,16 @@ grid-stride, entao com gridDim=1/blockDim=1 uma thread percorre tudo), com
 | simetria da adjacencia | as duas pontas se veem |
 | conectividade | 90.000 de 90.000 alcancados |
 | regioes | 10 regioes de 9.000 nos |
-| determinismo | mesma semente da o mesmo arquivo |
+| determinismo | duas execucoes na GPU dao o mesmo arquivo |
 | semente diferente | da grafo diferente |
 | leitura pelo jogo | mapa carrega e simula normalmente |
 
-O que **nao** foi verificado: execucao real na GPU. Ver abaixo.
+E o teste que fecha o desenho: a saida da GPU e **byte a byte igual** a do
+mesmo algoritmo rodado serialmente (os lacos sao grid-stride, entao com
+gridDim=1/blockDim=1 uma thread percorre tudo, e o mesmo fonte compila como C++
+contra um cuda_runtime.h de mentira). Ou seja, a eleicao por rodadas realmente
+nao depende da ordem em que as threads chegam - que era o ponto onde a versao
+paralela poderia divergir.
 
 ---
 
@@ -385,9 +430,12 @@ O que **nao** foi verificado: execucao real na GPU. Ver abaixo.
 
 Nao sao medicoes, sao impedimentos que ja custaram tempo:
 
-Esta maquina **nao compila nenhum `.cu`**, com nenhum dos dois toolkits
-instalados. Vale ate para um arquivo com um kernel vazio e zero includes - nao
-e problema do nosso codigo.
+**RESOLVIDO** por `tools/cuda_compat/math.h` - ver o fim desta secao. O que
+segue e o diagnostico, para nao se repetir a investigacao.
+
+Sem esse cabecalho, esta maquina **nao compila nenhum `.cu`**, com nenhum dos
+dois toolkits instalados. Vale ate para um arquivo com um kernel vazio e zero
+includes - nao e problema do nosso codigo.
 
 A causa e a glibc 2.43, mais nova que os dois toolkits. Ela declara um punhado
 de funcoes de C23 (`cospi`, `sinpi`, `rsqrt`) com `noexcept`, e o
@@ -409,13 +457,22 @@ O `-ccbin g++-14` resolve **outro** problema, esse sim real: o CUDA 12.9 aceita
 GCC ate 14 e a maquina tem g++-15 como padrao. E necessario, mas nao
 suficiente.
 
-Saidas possiveis, em ordem de esforco:
+### O que resolveu
 
-1. Compilar no servidor. Distribuicao de cluster costuma ter glibc bem mais
-   antiga, e ai o 12.x compila sem nada disso.
-2. Container com glibc antiga (docker e podman estao instalados aqui, mas sem
-   imagem CUDA local - seriam alguns GB de download).
-3. Esperar um CUDA que complete a guarda das tres funcoes.
+Fazer a glibc nao declarar as tres. A guarda em `bits/libc-header-start.h` e
+
+    __GLIBC_USE (IEC_60559_FUNCS_EXT) || __GLIBC_USE (ISOC23)
+
+e as **duas** pontas precisam cair. A primeira sai desligando `__USE_GNU`; a
+segunda nao vem junto, porque `_GNU_SOURCE` tambem define `_ISOC23_SOURCE` e o
+`features.h` tem guarda de inclusao - desligar `_GNU_SOURCE` depois nao refaz a
+conta. Por isso `__GLIBC_USE_ISOC23` e forcado a 0 na mao.
+
+`tools/cuda_compat/math.h` entra na frente do `<math.h>` do sistema por `-I`,
+desliga as duas pontas, chama o de verdade com `include_next` e restaura os
+macros. Em glibc anterior a 2.41 nao muda nada.
+
+Com isso, `make genGraph_cuda` compila e roda na P6000.
 
 Para o servidor: a A100 e sm_80, coberta pelo CUDA 12.x.
 `make genGraph_cuda CUDA_ARCH=sm_80`.
