@@ -28,22 +28,37 @@ class Simulation
         vector<Game> games;
         int turns = 0;
 
-        Simulation(int numberOfGames, int healthyPerGame, int infectedPerGame);
+        // healthy e infected sao TOTAIS, divididos igualmente entre os jogos.
+        // A sobra da divisao vai para os primeiros jogos, um agente cada, para
+        // que a soma bata exatamente com o que foi pedido.
+        Simulation(int numberOfGames, int healthy, int infected);
 
-        // Liga ou desliga os dois niveis de paralelismo (jogos por fora,
-        // agentes por dentro). O construtor ja escolhe sozinho pela regra de
-        // chooseNestedParallelism; isto e para forcar na mao e medir.
+        // Liga os dois niveis de paralelismo: os ambientes por fora, os agentes
+        // de cada um por dentro. Desligado por padrao, e uma escolha explicita
+        // como o numero de threads - o certo depende de quantos jogos ha para
+        // dividir entre as threads, e a tabela de medicoes esta em
+        // docs/medicoes.md.
         void setNestedParallelism(bool enabled);
 
-        // Aninha quando ha menos jogos do que threads, e nao aninha quando ha
-        // mais. Ver a tabela de medicoes na implementacao.
-        void chooseNestedParallelism();
-
+        // Mesma semente para todos os jogos.
         void setSeed(unsigned int seed);
+
+        // Uma semente por jogo. Jogos com o mesmo mapa e a mesma semente ainda
+        // assim divergem, porque o RNG e indexado pelo id global e as faixas de
+        // id sao disjuntas; a semente por jogo e para quando se quer separar os
+        // ambientes de proposito.
+        void setSeeds(const vector<unsigned int>& seeds);
+
         void setSeedMode(SeedMode mode, int regionOrNode = 0);
 
-        // Carrega o mapa em todos os jogos e liga cada um ao pool, com faixas
-        // de ids globais contiguas e disjuntas.
+        // Um arquivo de mapa por jogo.
+        void setMaps(const vector<string>& mapFiles);
+
+        // Liga cada jogo ao pool, com faixas de ids globais contiguas e
+        // disjuntas, e carrega o mapa de cada um.
+        void initialize();
+
+        // Atalho: todos os jogos com o mesmo mapa.
         void initialize(const string& fileName);
 
         // Semeia os agentes de todos os jogos.
@@ -61,9 +76,9 @@ class Simulation
         void reset();
 
     private:
-        int healthyPerGame;
-        int infectedPerGame;
-        unsigned int baseSeed;
+        int totalHealthy;
+        int totalInfected;
+        vector<string> mapFiles;
         SeedMode seedMode = SeedMode::Uniform;
         int seedTarget = 0;
 };

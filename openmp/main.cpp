@@ -3,11 +3,28 @@
 #include <cstdlib>
 #include <omp.h>
 
+// ---------------------------------------------------------------------------
+// Configuracao por jogo, escrita aqui na mao.
+//
+// Sao coisas que nao cabem bem numa flag - um mapa e uma semente por ambiente,
+// em ordem. Deixe vazio para que todos os jogos usem --map e --seed.
+//
+// Sem validacao de proposito: quem edita estas listas e quem compila.
+// ---------------------------------------------------------------------------
+static const vector<string> gameMaps = {
+    // "A1100a.txt",
+    // "map.txt",
+};
+
+static const vector<unsigned int> gameSeeds = {
+    // 42,
+    // 2024,
+};
+
 int main(int argc, char** argv)
 {
-    // --agents e --infected sao POR JOGO: com --games 4 --agents 1000, sao
-    // 4.000 agentes no total. Assim aumentar o numero de ambientes nao encolhe
-    // cada um deles.
+    // --agents e --infected sao TOTAIS, divididos igualmente entre os jogos:
+    // com --games 4 --agents 1000, sao 250 saudaveis por jogo.
     int initialNumberHealthy = 90000000;
     int initialNumberInfected = 10000000;
     int numberOfTurns = 1200;
@@ -15,9 +32,9 @@ int main(int argc, char** argv)
     // Zero significa "deixa o OpenMP decidir", que e o padrao dele: o numero de
     // nucleos logicos, ou o que estiver em OMP_NUM_THREADS.
     int numberOfThreads = 0;
-    // -1 deixa a Simulation escolher pela relacao entre jogos e threads (ver
-    // chooseNestedParallelism). 0 e 1 forcam, para medir.
-    int nested = -1;
+    // Paralelismo nos dois lacos (jogos e agentes) ou so no de jogos. Escolha
+    // explicita, como o numero de threads: ver docs/medicoes.md.
+    bool nested = false;
     unsigned int seed = Constants::DEFAULT_SEED;
     string mapFile = "map.txt";
     SeedMode seedMode = SeedMode::Uniform;
@@ -34,8 +51,7 @@ int main(int argc, char** argv)
         else if (flag == "--seed" && hasValue) { seed = (unsigned int) strtoul(argv[++i], nullptr, 10); }
         else if (flag == "--games" && hasValue) { numberOfGames = atoi(argv[++i]); }
         else if (flag == "--threads" && hasValue) { numberOfThreads = atoi(argv[++i]); }
-        else if (flag == "--nested") { nested = 1; }
-        else if (flag == "--no-nested") { nested = 0; }
+        else if (flag == "--nested") { nested = true; }
         else if (flag == "--seed-target" && hasValue) { seedTarget = atoi(argv[++i]); }
         else if (flag == "--seed-mode" && hasValue)
         {
@@ -62,13 +78,16 @@ int main(int argc, char** argv)
     }
 
     Simulation simulation(numberOfGames, initialNumberHealthy, initialNumberInfected);
-    if (nested >= 0)
-    {
-        simulation.setNestedParallelism(nested == 1);
-    }
-    simulation.setSeed(seed);
+    simulation.setNestedParallelism(nested);
+
+    if (gameSeeds.empty()) { simulation.setSeed(seed); }
+    else { simulation.setSeeds(gameSeeds); }
+
     simulation.setSeedMode(seedMode, seedTarget);
-    simulation.initialize(mapFile);
+
+    if (gameMaps.empty()) { simulation.initialize(mapFile); }
+    else { simulation.setMaps(gameMaps); simulation.initialize(); }
+
     simulation.start();
     simulation.run(numberOfTurns);
     return 0;

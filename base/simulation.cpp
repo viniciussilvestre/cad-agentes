@@ -7,9 +7,8 @@
 
 Simulation::Simulation(int numberOfGames, int healthy, int infected)
 {
-    healthyPerGame = healthy;
-    infectedPerGame = infected;
-    baseSeed = Constants::DEFAULT_SEED;
+    totalHealthy = healthy;
+    totalInfected = infected;
 
     if (numberOfGames < 1)
     {
@@ -17,15 +16,29 @@ Simulation::Simulation(int numberOfGames, int healthy, int infected)
         exit(EXIT_FAILURE);
     }
     games.resize((size_t) numberOfGames);
+    mapFiles.assign((size_t) numberOfGames, "A1100a.txt");
+    setSeed(Constants::DEFAULT_SEED);
 }
 
 void Simulation::setSeed(unsigned int seed)
 {
-    baseSeed = seed;
     for (Game& game : games)
     {
         game.setSeed(seed);
     }
+}
+
+void Simulation::setSeeds(const vector<unsigned int>& seeds)
+{
+    for (size_t index = 0; index < games.size(); index++)
+    {
+        games[index].setSeed(seeds[index]);
+    }
+}
+
+void Simulation::setMaps(const vector<string>& files)
+{
+    mapFiles = files;
 }
 
 void Simulation::setSeedMode(SeedMode mode, int regionOrNode)
@@ -40,18 +53,33 @@ void Simulation::setSeedMode(SeedMode mode, int regionOrNode)
 
 void Simulation::initialize(const string& fileName)
 {
-    int agentsPerGame = healthyPerGame + infectedPerGame;
-    pool.resize(agentsPerGame * (int) games.size());
+    setMaps(vector<string>(games.size(), fileName));
+    initialize();
+}
 
-    for (size_t index = 0; index < games.size(); index++)
+void Simulation::initialize()
+{
+    pool.resize(totalHealthy + totalInfected);
+
+    int numberOfGames = (int) games.size();
+    int firstAgent = 0;
+
+    for (int index = 0; index < numberOfGames; index++)
     {
+        // Divisao igual, com a sobra distribuida um agente por jogo entre os
+        // primeiros. Sem isso, --agents 10 --games 4 perderia dois agentes na
+        // divisao inteira e a conservacao acusaria.
+        int healthy = totalHealthy / numberOfGames + (index < totalHealthy % numberOfGames ? 1 : 0);
+        int infected = totalInfected / numberOfGames + (index < totalInfected % numberOfGames ? 1 : 0);
+
         // Faixas de ids contiguas e disjuntas. Contiguas porque o laco de um
         // jogo varre members em ordem, e no setup members e exatamente a faixa
         // - entao a leitura do pool sai sequencial. Disjuntas porque o id e a
         // identidade do agente no pool: dois jogos com a mesma faixa seriam dois
         // jogos escrevendo no mesmo agente.
-        games[index].configure(pool, (int) index * agentsPerGame, healthyPerGame, infectedPerGame);
-        games[index].initializeGame(fileName);
+        games[index].configure(pool, firstAgent, healthy, infected);
+        games[index].initializeGame(mapFiles[index]);
+        firstAgent += healthy + infected;
     }
 }
 

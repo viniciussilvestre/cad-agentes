@@ -8,9 +8,8 @@
 
 Simulation::Simulation(int numberOfGames, int healthy, int infected)
 {
-    healthyPerGame = healthy;
-    infectedPerGame = infected;
-    baseSeed = Constants::DEFAULT_SEED;
+    totalHealthy = healthy;
+    totalInfected = infected;
 
     if (numberOfGames < 1)
     {
@@ -18,7 +17,8 @@ Simulation::Simulation(int numberOfGames, int healthy, int infected)
         exit(EXIT_FAILURE);
     }
     games.resize((size_t) numberOfGames);
-    chooseNestedParallelism();
+    mapFiles.assign((size_t) numberOfGames, "A1100a.txt");
+    setSeed(Constants::DEFAULT_SEED);
 }
 
 void Simulation::setNestedParallelism(bool enabled)
@@ -27,36 +27,33 @@ void Simulation::setNestedParallelism(bool enabled)
     // Game::step vira codigo serial dentro de cada thread do laco de jogos, e o
     // que roda em paralelo sao os ambientes.
     //
-    // Qual e melhor nao e questao de gosto, e de quantos jogos existem para
-    // dividir entre as threads. Medido com 28 threads:
-    //
-    //                       so jogos   aninhado
-    //    2 jogos, 8,4M ag.    2,738 s    0,603 s
-    //    8 jogos, 8,4M ag.    1,245 s    0,750 s
-    //   28 jogos, 8,4M ag.    0,272 s    1,085 s
-    //   56 jogos, 8,4M ag.    0,494 s    2,059 s
-    //
-    // Com poucos jogos, o laco de fora deixa a maioria das threads paradas - 2
-    // jogos usam 2 threads de 28. Com jogos demais, o aninhamento cria 28x28 =
-    // 784 threads disputando 28 nucleos e a sobrecarga come tudo.
-    //
-    // A virada e exatamente em jogos == threads, que e o que
-    // chooseNestedParallelism usa.
+    // Qual e melhor depende de quantos jogos ha para dividir entre as threads,
+    // e a diferenca e grande nos dois sentidos - com poucos jogos o laco de
+    // fora deixa a maioria das threads parada, com jogos demais o aninhamento
+    // cria threads^2 disputando os mesmos nucleos. As medicoes estao em
+    // docs/medicoes.md.
     omp_set_max_active_levels(enabled ? 2 : 1);
-}
-
-void Simulation::chooseNestedParallelism()
-{
-    setNestedParallelism((int) games.size() < omp_get_max_threads());
 }
 
 void Simulation::setSeed(unsigned int seed)
 {
-    baseSeed = seed;
     for (Game& game : games)
     {
         game.setSeed(seed);
     }
+}
+
+void Simulation::setSeeds(const vector<unsigned int>& seeds)
+{
+    for (size_t index = 0; index < games.size(); index++)
+    {
+        games[index].setSeed(seeds[index]);
+    }
+}
+
+void Simulation::setMaps(const vector<string>& files)
+{
+    mapFiles = files;
 }
 
 void Simulation::setSeedMode(SeedMode mode, int regionOrNode)
@@ -71,18 +68,33 @@ void Simulation::setSeedMode(SeedMode mode, int regionOrNode)
 
 void Simulation::initialize(const string& fileName)
 {
-    int agentsPerGame = healthyPerGame + infectedPerGame;
-    pool.resize(agentsPerGame * (int) games.size());
+    setMaps(vector<string>(games.size(), fileName));
+    initialize();
+}
 
-    for (size_t index = 0; index < games.size(); index++)
+void Simulation::initialize()
+{
+    pool.resize(totalHealthy + totalInfected);
+
+    int numberOfGames = (int) games.size();
+    int firstAgent = 0;
+
+    for (int index = 0; index < numberOfGames; index++)
     {
+        // Divisao igual, com a sobra distribuida um agente por jogo entre os
+        // primeiros. Sem isso, --agents 10 --games 4 perderia dois agentes na
+        // divisao inteira e a conservacao acusaria.
+        int healthy = totalHealthy / numberOfGames + (index < totalHealthy % numberOfGames ? 1 : 0);
+        int infected = totalInfected / numberOfGames + (index < totalInfected % numberOfGames ? 1 : 0);
+
         // Faixas de ids contiguas e disjuntas. Contiguas porque o laco de um
         // jogo varre members em ordem, e no setup members e exatamente a faixa
         // - entao a leitura do pool sai sequencial. Disjuntas porque o id e a
         // identidade do agente no pool: dois jogos com a mesma faixa seriam dois
         // jogos escrevendo no mesmo agente.
-        games[index].configure(pool, (int) index * agentsPerGame, healthyPerGame, infectedPerGame);
-        games[index].initializeGame(fileName);
+        games[index].configure(pool, firstAgent, healthy, infected);
+        games[index].initializeGame(mapFiles[index]);
+        firstAgent += healthy + infected;
     }
 }
 
@@ -100,15 +112,6 @@ void Simulation::step()
     // dentro de Game::step. Sao independentes - um jogo nao le nem escreve o
     // infectedAtNode nem o members de outro, e o pool e escrito por id, que e
     // disjunto entre jogos enquanto nao ha viagem.
-    //
-    // O aninhamento so vale a pena quando um nivel sozinho nao enche a maquina:
-    // com 1 jogo o laco de fora nao tem o que dividir, e com jogos demais o de
-    // dentro vira fatia pequena. Por isso ele e opcional (ver
-    // Simulation::setNestedParallelism): quem decide e a medicao, nao o padrao.
-    //
-    // Sem aninhamento ligado, o OpenMP serializa a regiao interna e o efeito e
-    // paralelizar so os jogos - que ja e o comportamento certo quando ha jogos
-    // suficientes.
     //
     // O caso de um jogo so desvia ANTES do pragma, e nao com uma clausula
     // if(): uma regiao paralela com if falso ainda e uma regiao paralela, e as

@@ -150,8 +150,8 @@ Tres conclusoes:
    threads); com jogos demais o aninhamento cria 28x28 = 784 threads
    disputando 28 nucleos.
 
-Por isso `Simulation` escolhe sozinha: aninha quando
-`jogos < omp_get_max_threads()`.
+O aninhamento e uma opcao explicita (`--nested`), como `--threads`: a tabela
+acima diz qual escolher, mas quem escolhe e quem roda.
 
 ### Armadilha do libgomp: regiao paralela com `if` falso
 
