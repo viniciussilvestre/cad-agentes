@@ -203,6 +203,18 @@ viajar "para frente" cai num jogo que ainda nao andou e viajar "para tras" nao.
 Sao 0,34% dos turnos-agente. O travelLock impede viajar duas vezes, mas nao
 impede o segundo turno.
 
+**Decidido manter.** Chegar num ambiente exige processar o estado do agente
+ali de qualquer forma: o segundo turno nao e trabalho perdido, e a entrada do
+agente no jogo novo.
+
+Um detalhe fica em aberto e vale saber: o segundo turno reusa os MESMOS
+sorteios do primeiro, porque o RNG e indexado por (id, turno) e a semente e
+remontada igual no destino. O agente sorteia o mesmo slot de passeio e compara
+o mesmo numero contra o limiar da transicao - nao sao dois turnos
+independentes, sao um turno repetido. Se em algum momento isso incomodar,
+basta deslocar o indice do fluxo quando travelLock > 0, que e como se sabe que
+aquele processamento e de chegada.
+
 ### Determinismo
 
 | | |
