@@ -38,7 +38,6 @@
 #include <random>
 #include <sstream>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 #ifdef USE_MPI
@@ -97,9 +96,45 @@ static int sampleDistance(const vector<double>& cumulative, mt19937& rng)
     return index + 1;
 }
 
-static vector<int> bfsDistances(const vector<vector<int>>& adjacency, int source)
+// A vizinhanca e um bloco plano de MAX_DEGREE slots por no, e nao um
+// vector<vector<int>>.
+//
+// Nao e arrumacao: e o que torna grades grandes viaveis. Um vector por no custa
+// 24 bytes do objeto mais um bloco no heap por no (cabecalho do malloc, o mesmo
+// arredondamento e as realocacoes do crescimento) - da ordem de 70 bytes por no
+// para guardar 4 inteiros. Plano, sao 24 bytes fixos, e os vizinhos de um no
+// ficam na mesma linha de cache.
+static inline int neighborSlot(int node, int slot)
 {
-    vector<int> distance(adjacency.size(), -1);
+    return node * MAX_DEGREE + slot;
+}
+
+static bool hasEdge(const vector<int>& adjacency, const vector<int>& degree, int from, int to)
+{
+    // O grau e limitado a MAX_DEGREE, entao varrer os vizinhos custa no maximo
+    // 6 comparacoes contiguas - mais barato que consultar uma tabela hash, e
+    // sem a tabela inteira na memoria.
+    for (int slot = 0; slot < degree[from]; slot++)
+    {
+        if (adjacency[neighborSlot(from, slot)] == to)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void addEdge(vector<int>& adjacency, vector<int>& degree, int from, int to)
+{
+    adjacency[neighborSlot(from, degree[from])] = to;
+    degree[from]++;
+    adjacency[neighborSlot(to, degree[to])] = from;
+    degree[to]++;
+}
+
+static vector<int> bfsDistances(const vector<int>& adjacency, const vector<int>& degree, int source)
+{
+    vector<int> distance(degree.size(), -1);
     queue<int> pending;
     distance[source] = 0;
     pending.push(source);
@@ -107,8 +142,9 @@ static vector<int> bfsDistances(const vector<vector<int>>& adjacency, int source
     {
         int node = pending.front();
         pending.pop();
-        for (int neighbor : adjacency[node])
+        for (int slot = 0; slot < degree[node]; slot++)
         {
+            int neighbor = adjacency[neighborSlot(node, slot)];
             if (distance[neighbor] == -1)
             {
                 distance[neighbor] = distance[node] + 1;
@@ -164,28 +200,20 @@ static bool generateGraph(const GraphConfig& config, const string& outputFile, s
         nodeRegion[i] = regionRow * config.regionsX + regionColumn;
     }
 
-    vector<vector<int>> adjacency(numberOfNodes);
+    // Bloco plano de MAX_DEGREE slots por no. -1 marca slot livre.
+    vector<int> adjacency((size_t) numberOfNodes * MAX_DEGREE, -1);
     vector<int> degree(numberOfNodes, 0);
-    unordered_set<long long> edgeKeys;
 
     // Arestas de grade.
     for (int i = 0; i < numberOfNodes; i++)
     {
         if (i % config.width != config.width - 1)
         {
-            adjacency[i].push_back(i + 1);
-            adjacency[i + 1].push_back(i);
-            degree[i]++;
-            degree[i + 1]++;
-            edgeKeys.insert((long long) i * numberOfNodes + (i + 1));
+            addEdge(adjacency, degree, i, i + 1);
         }
         if (i + config.width < numberOfNodes)
         {
-            adjacency[i].push_back(i + config.width);
-            adjacency[i + config.width].push_back(i);
-            degree[i]++;
-            degree[i + config.width]++;
-            edgeKeys.insert((long long) i * numberOfNodes + (i + config.width));
+            addEdge(adjacency, degree, i, i + config.width);
         }
     }
 
@@ -235,8 +263,7 @@ static bool generateGraph(const GraphConfig& config, const string& outputFile, s
                 {
                     continue;
                 }
-                long long key = (long long) min(i, target) * numberOfNodes + max(i, target);
-                if (edgeKeys.find(key) != edgeKeys.end())
+                if (hasEdge(adjacency, degree, i, target))
                 {
                     continue;
                 }
@@ -249,11 +276,7 @@ static bool generateGraph(const GraphConfig& config, const string& outputFile, s
                     shortcutsRejected++;
                     break;
                 }
-                adjacency[i].push_back(target);
-                adjacency[target].push_back(i);
-                degree[i]++;
-                degree[target]++;
-                edgeKeys.insert(key);
+                addEdge(adjacency, degree, i, target);
                 shortcutsCreated++;
                 break;
             }
@@ -268,7 +291,16 @@ static bool generateGraph(const GraphConfig& config, const string& outputFile, s
         return false;
     }
 
-    int numberOfEdges = (int) edgeKeys.size();
+    // Cada aresta gasta um slot nos dois extremos, entao a soma dos graus e o
+    // dobro do numero de arestas. Antes esse numero saia do tamanho da tabela
+    // hash, que era o unico motivo para ela sobreviver ate aqui.
+    long long degreeTotal = 0;
+    for (int value : degree)
+    {
+        degreeTotal += value;
+    }
+    int numberOfEdges = (int) (degreeTotal / 2);
+
     output << numberOfNodes << "\t" << numberOfEdges << "\t" << numberOfRegions << "\n";
     output << "\n";
     for (int i = 0; i < numberOfNodes; i++)
@@ -280,8 +312,9 @@ static bool generateGraph(const GraphConfig& config, const string& outputFile, s
     for (int i = 0; i < numberOfNodes; i++)
     {
         vector<int> targets;
-        for (int neighbor : adjacency[i])
+        for (int slot = 0; slot < degree[i]; slot++)
         {
+            int neighbor = adjacency[neighborSlot(i, slot)];
             if (neighbor > i)
             {
                 targets.push_back(neighbor);
@@ -308,7 +341,7 @@ static bool generateGraph(const GraphConfig& config, const string& outputFile, s
         degreeSum += value;
     }
 
-    vector<int> firstSweep = bfsDistances(adjacency, 0);
+    vector<int> firstSweep = bfsDistances(adjacency, degree, 0);
     int reached = 0;
     for (int value : firstSweep)
     {
@@ -319,7 +352,7 @@ static bool generateGraph(const GraphConfig& config, const string& outputFile, s
     }
     bool connected = (reached == numberOfNodes);
     int source = farthestNode(firstSweep);
-    vector<int> secondSweep = bfsDistances(adjacency, source);
+    vector<int> secondSweep = bfsDistances(adjacency, degree, source);
     int diameter = secondSweep[farthestNode(secondSweep)];
 
     out << "arquivo: " << outputFile << "\n";

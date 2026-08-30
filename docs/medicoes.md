@@ -261,6 +261,38 @@ Com mais grafos do que processos, a divisao e circular (`grafo % ranks`), e
 cada processo gera varios. Conferido: `mpirun -n 4 --graphs 8` produz os oito
 arquivos.
 
+### Memoria: o que cabe e o que nao cabe
+
+Custo por no, medido:
+
+| | bytes/no |
+|---|---|
+| antes (vector<vector<int>> + unordered_set) | 170 |
+| depois (bloco plano de 6 slots, sem tabela hash) | 51 |
+
+O que sumiu: um `vector<int>` por no custa 24 bytes do objeto mais um bloco no
+heap por no; e a tabela hash de arestas guardava ~2 entradas por no a ~40 bytes
+cada, so para responder "esta aresta ja existe?". Com grau limitado a 6, essa
+pergunta se responde varrendo os vizinhos do proprio no - 6 comparacoes
+contiguas, sem estrutura nenhuma. Saida byte a byte identica.
+
+Quanto custa cada grafo, com 51 bytes/no:
+
+| grade | nos | memoria por grafo |
+|---|---|---|
+| 1000x1000 | 1 M | 51 MB |
+| 3000x3000 | 9 M | 460 MB |
+| 10000x10000 (padrao) | 100 M | **5,1 GB** |
+
+**O numero de grafos nao e o numero de threads.** `--graphs 64` com o padrao
+10000x10000 pede 64 x 5,1 GB = 326 GB se os 64 saem ao mesmo tempo. Quem
+controla quantos saem juntos e `OMP_NUM_THREADS`:
+
+    OMP_NUM_THREADS=4 ./genGraph --graphs 64     64 grafos, 4 de cada vez
+
+Antes desta mudanca o mesmo comando pediria 17 GB por grafo, e 64 em paralelo
+passavam de 1 TB - foi o que matou o job 182315 no PBS.
+
 ---
 
 ## Ambiente CUDA (bloqueios conhecidos)
