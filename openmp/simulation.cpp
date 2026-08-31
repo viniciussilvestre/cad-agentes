@@ -188,16 +188,6 @@ void Simulation::run(int numberOfTurns)
     }
     chrono::steady_clock::time_point after = chrono::steady_clock::now();
 
-    cout << "turno,S,E,I,R,D" << endl;
-    vector<int> counts = countStates();
-    checkConservation(counts);
-
-    cout << turns << "," << counts[static_cast<int>(States::SUSCEPTIBLE)]
-        << "," << counts[static_cast<int>(States::EXPOSED)]
-        << "," << counts[static_cast<int>(States::INFECTED)]
-        << "," << counts[static_cast<int>(States::RECOVERED)]
-        << "," << counts[static_cast<int>(States::DEAD)] << endl;
-
     double time = chrono::duration<double>(after - before).count();
     double elapsed = (time > 1e-9) ? time : 1e-9;
     cerr << "tempo: " << fixed << setprecision(3) << elapsed << " s   " << endl;

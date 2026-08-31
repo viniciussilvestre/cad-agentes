@@ -51,8 +51,8 @@ static const int BLOCK_SIZE = 256;
 
 struct GraphConfig
 {
-    int width = 10000;
-    int height = 10000;
+    int width = 5500;
+    int height = 5500;
     double shortcuts = 0.01;
     int regionsX = 5;
     int regionsY = 2;
