@@ -9,8 +9,11 @@
 #include <iomanip>
 #include <omp.h>
 
-Game::Game(int initialNumberHealthy, int initialNumberInfected)
+Game::Game()
 {
+    initialNumberHealthy = 0;
+    initialNumberInfected = 0;
+    firstAgent = 0;
     turns = 0;
     isRunning = false;
     min_x_coordinate = numeric_limits<int>::max();
@@ -20,10 +23,14 @@ Game::Game(int initialNumberHealthy, int initialNumberInfected)
     numberOfNodes = 0;
     numberOfRegions = 0;
     baseSeed = Constants::DEFAULT_SEED;
-    agentsPositionVector.assign((initialNumberHealthy + initialNumberInfected), 0);
-    agentsStatusVector.assign((initialNumberHealthy + initialNumberInfected), States::SUSCEPTIBLE);
-    this->initialNumberHealthy = initialNumberHealthy;
-    this->initialNumberInfected = initialNumberInfected;
+}
+
+void Game::configure(AgentPool& agentPool, int firstAgentId, int numberOfHealthy, int numberOfInfected)
+{
+    pool = &agentPool;
+    firstAgent = firstAgentId;
+    initialNumberHealthy = numberOfHealthy;
+    initialNumberInfected = numberOfInfected;
 }
 
 void Game::setSeed(unsigned int seed)
@@ -37,30 +44,52 @@ void Game::setSeedMode(SeedMode mode, int regionOrNode)
     seedTarget = regionOrNode;
 }
 
-void Game::setCsvOutput(const string& fileName)
-{
-    csvFileName = fileName;
-}
-
-void Game::initiateThreads(int numberOfThreads, States state)
-{
-    for (int i = 0; i < numberOfThreads; i++)
-    {
-        // agents e a unica dona dos agentes: o id e a posicao na qual o agente
-        // entra no vetor, entao serve de indice direto nos vetores consolidados.
-        int playerId = (int) agents.size();
-        int startNode = (state == States::INFECTED) ? generateInfectedLocation(playerId) : generateLocation(playerId);
-        agents.emplace_back(playerId, startNode, state, this);
-        Player& player = agents.back();
-        agentsPositionVector[player.id] = player.position;
-        agentsStatusVector[player.id] = player.state;
-    }
-}
-
 void Game::startAllDumbThreads()
 {
-    initiateThreads(initialNumberHealthy, States::SUSCEPTIBLE);
-    initiateThreads(initialNumberInfected, States::INFECTED);
+    // Os ids sao globais e a posicao inicial e funcao pura do id, entao o setup
+    // e um laco direto sobre o pool. Antes era um emplace_back de 100 milhoes
+    // de objetos - alocacao, crescimento do vetor e copia.
+    //
+    // Cada jogo semeia a propria faixa [firstAgent, firstAgent + n). Como o RNG
+    // e indexado pelo id GLOBAL, dois jogos com o mesmo mapa e o mesmo numero de
+    // agentes ainda assim evoluem diferente - o que se quer de ambientes
+    // independentes rodando lado a lado.
+    //
+    // Os suscetiveis vem primeiro e os infectados depois, como antes: o RNG e
+    // indexado pelo id, entao trocar a ordem daria outro fluxo a cada agente.
+    //
+    // As checagens de limite da semeadura sao feitas de uma vez aqui, e nao a
+    // cada agente: a versao OpenMP precisa disso porque generateInfectedLocation
+    // aborta com exit() e sair de dentro de uma regiao paralela nao e forma de
+    // reportar problema de configuracao. As duas versoes seguem iguais.
+    if (initialNumberInfected > 0)
+    {
+        (void) generateInfectedLocation(firstAgent);
+    }
+
+    int numberOfAgents = initialNumberHealthy + initialNumberInfected;
+
+    // Capacidade fixa, com folga para receber viajantes. Alocada aqui e nunca
+    // mais mexida: e o que permite que um jogo escreva na lista de outro
+    // enquanto o dono dela a percorre.
+    members.assign((size_t) (numberOfAgents + numberOfAgents / Constants::TRAVEL_CAPACITY_DIVISOR), -1);
+    memberCount = numberOfAgents;
+
+    #pragma omp parallel for schedule(static)
+    for (int local = 0; local < numberOfAgents; local++)
+    {
+        int id = firstAgent + local;
+        bool infected = (local >= initialNumberHealthy);
+        pool->positions[id] = infected ? generateInfectedLocation(id) : generateLocation(id);
+        pool->states[id] = infected ? States::INFECTED : States::SUSCEPTIBLE;
+        // O contador mede turnos no estado atual e zera em toda transicao, entao
+        // vale zero tanto para quem nasce SUSCEPTIBLE quanto para quem nasce
+        // INFECTED - este ultimo comeca a fase infecciosa do zero, como qualquer
+        // outro que acabou de adoecer.
+        pool->counters[id] = 0;
+        pool->travelLock[id] = 0;
+        members[local] = id;
+    }
 }
 
 int Game::generateLocation(int id) const
@@ -126,46 +155,6 @@ uint64_t Game::hashSeed(unsigned int seed, int id, int turn)
     return hash;
 }
 
-pair<int, int> Game::mapNodes(int x, int y, int x_min, int x_max, int y_min, int y_max) const
-{
-    int range_x = x_max - x_min;
-    int range_y = y_max - y_min;
-    int new_x = Constants::lowerResolutionX + (((x - x_min) * ((Constants::resolutionX - 62) - Constants::lowerResolutionX)) / range_x);
-    int new_y = Constants::lowerResolutionY + (((y - y_min) * ((Constants::resolutionY - 60) - Constants::lowerResolutionY)) / range_y);
-    return make_pair(new_x, new_y);
-}
-
-void Game::remapNodes()
-{
-    for (vector<int> & node: nodes)
-    {
-        int x;
-        int y;
-        tie(x, y) = mapNodes(node[0], node[1], min_x_coordinate, max_x_coordinate, min_y_coordinate, max_y_coordinate);
-        node[0] = x;
-        node[1] = y;
-        graphCoords.push_back({node[0], node[1]});
-    }
-
-    for (vector<int> & edge: edges)
-    {
-        int edgeSource = edge[0];
-        int edgeDestination = edge[1];
-        if (edgeSource < 0 || edgeSource >= (int) nodes.size())
-            continue;
-        if (edgeDestination < 0 || edgeDestination >= (int) nodes.size())
-            continue;
-        int xSource = nodes[edgeSource][0];
-        int ySource = nodes[edgeSource][1];
-        int xDestination = nodes[edgeDestination][0];
-        int yDestination = nodes[edgeDestination][1];
-        Point source = {xSource, ySource};
-        Point destination = {xDestination, yDestination};
-        Edge connection = {source, destination};
-        graphEdges.emplace_back(connection);
-    }
-}
-
 // Escolhe o slot cardinal de uma aresta a partir do deslocamento entre as
 // coordenadas dos dois nos. A regra e simetrica: se v esta a direita de u,
 // entao u esta a esquerda de v, logo os dois lados concordam sobre o eixo e
@@ -205,8 +194,40 @@ int Game::claimSlot(int node, int preferredSlot)
     return -1;
 }
 
+// Le um inteiro com sinal a partir de cursor, pulando brancos antes dele.
+// Devolve false quando nao ha numero nenhum dali em diante.
+//
+// Substitui stringstream + istream_iterator, que montava um vector<string> por
+// LINHA. Num mapa de 5500x5500 sao 91 milhoes de linhas, e era isso, e nao o
+// grafo, que dominava o tempo e a memoria da carga.
+static bool readInt(const char*& cursor, int& value)
+{
+    while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r')
+    {
+        cursor++;
+    }
+    bool negative = false;
+    if (*cursor == '-') { negative = true; cursor++; }
+    else if (*cursor == '+') { cursor++; }
+    if (*cursor < '0' || *cursor > '9')
+    {
+        return false;
+    }
+    long long parsed = 0;
+    while (*cursor >= '0' && *cursor <= '9')
+    {
+        parsed = parsed * 10 + (*cursor - '0');
+        cursor++;
+    }
+    value = (int) (negative ? -parsed : parsed);
+    return true;
+}
+
 void Game::initializeGame(const string& fileName)
 {
+    // O arquivo e lido em fluxo, uma linha por vez, e nao carregado inteiro
+    // para um vector<string>. Guardar as 91 milhoes de linhas de um mapa de
+    // 5500x5500 custava mais memoria que o grafo que sai delas.
     ifstream file(fileName);
     if (!file.is_open())
     {
@@ -214,66 +235,76 @@ void Game::initializeGame(const string& fileName)
         exit(EXIT_FAILURE);
     }
 
-    vector<string> lines;
     string line;
-    while (getline(file, line)) {
-        lines.push_back(line);
-    }
-    file.close();
-
-    if (lines.empty()) {
+    if (!getline(file, line))
+    {
         cerr << "Erro: o arquivo do grafo '" << fileName << "' esta vazio." << endl;
         exit(EXIT_FAILURE);
     }
 
-    vector<string> items;
-    stringstream iss(lines[0]);
-    copy(istream_iterator<string>(iss), istream_iterator<string>(), back_inserter(items));
-    if (items.size() < 3) {
+    int declaredNodes = 0;
+    int declaredEdges = 0;
+    const char* cursor = line.c_str();
+    if (!readInt(cursor, declaredNodes) || !readInt(cursor, declaredEdges) ||
+        !readInt(cursor, numberOfRegions))
+    {
         cerr << "Erro: cabecalho invalido em '" << fileName
              << "': esperado 'numero_de_nos numero_de_arestas numero_de_regioes'." << endl;
         exit(EXIT_FAILURE);
     }
-    numberOfRegions = stoi(items[2]);
     if (numberOfRegions < 1) {
         cerr << "Erro: numero de regioes invalido em '" << fileName << "': " << numberOfRegions << "." << endl;
         exit(EXIT_FAILURE);
     }
 
-    // Primeira passada: os nos. As coordenadas cruas sao guardadas antes de
-    // remapNodes() porque a classificacao cardinal das arestas depende delas -
-    // o remapeamento escala X e Y por fatores diferentes e distorceria o eixo
-    // dominante.
-    int counter = 0;
-    size_t edgeStart = lines.size();
-    for (size_t i = 1; i < lines.size(); ++i) {
-        line = lines[i];
-        if (line.empty()) {
-            counter++;
-            if (counter == 2) {
-                edgeStart = i + 1;
-                break;
-            }
+    // As coordenadas sao LOCAIS: servem so para classificar a direcao das
+    // arestas enquanto o arquivo e lido, e morrem com a funcao. O
+    // remapeamento para tela que existia aqui produzia dois vetores que
+    // ninguem lia.
+    vector<int> coordinateX;
+    vector<int> coordinateY;
+    vector<int> degree;
+    if (declaredNodes > 0)
+    {
+        coordinateX.reserve((size_t) declaredNodes);
+        coordinateY.reserve((size_t) declaredNodes);
+        nodeRegion.reserve((size_t) declaredNodes);
+    }
+
+    int blankLines = 0;
+    size_t lineNumber = 1;
+    bool nodesClosed = false;
+
+    while (getline(file, line))
+    {
+        lineNumber++;
+        if (line.empty())
+        {
+            blankLines++;
             continue;
         }
-        if (counter == 1) {
-            vector<string> values;
-            stringstream iss2(line);
-            copy(istream_iterator<string>(iss2), istream_iterator<string>(), back_inserter(values));
-            if (values.size() < 3) {
-                cerr << "Erro: linha de no invalida em '" << fileName << "' (linha " << (i + 1)
+
+        cursor = line.c_str();
+
+        if (blankLines == 1)
+        {
+            int x_coordinate = 0;
+            int y_coordinate = 0;
+            int region = 0;
+            if (!readInt(cursor, x_coordinate) || !readInt(cursor, y_coordinate) ||
+                !readInt(cursor, region))
+            {
+                cerr << "Erro: linha de no invalida em '" << fileName << "' (linha " << lineNumber
                      << "): esperado 'x y regiao'." << endl;
                 exit(EXIT_FAILURE);
             }
-            int x_coordinate = stoi(values[0]);
-            int y_coordinate = stoi(values[1]);
-            int region = stoi(values[2]);
             if (region < 0 || region >= numberOfRegions) {
-                cerr << "Erro: no " << nodes.size() << " tem regiao " << region
+                cerr << "Erro: no " << coordinateX.size() << " tem regiao " << region
                      << ", fora de [0, " << numberOfRegions << ")." << endl;
                 exit(EXIT_FAILURE);
             }
-            nodes.push_back({x_coordinate, y_coordinate});
+            coordinateX.push_back(x_coordinate);
+            coordinateY.push_back(y_coordinate);
             nodeRegion.push_back(region);
             if (x_coordinate > max_x_coordinate)
                 max_x_coordinate = x_coordinate;
@@ -283,35 +314,40 @@ void Game::initializeGame(const string& fileName)
                 min_x_coordinate = x_coordinate;
             if (y_coordinate < min_y_coordinate)
                 min_y_coordinate = y_coordinate;
-        }
-    }
-
-    if (nodes.empty()) {
-        cerr << "Erro: nenhum no lido de '" << fileName << "'." << endl;
-        exit(EXIT_FAILURE);
-    }
-    numberOfNodes = (int) nodes.size();
-
-    // Construcao direta da vizinhanca de grau fixo. Sem matriz densa: com
-    // 40.000 nos uma matriz nos x nos passaria de 6 GB e nem alocaria.
-    neighbors.assign((size_t) numberOfNodes * Constants::SLOTS, -1);
-    vector<int> degree(numberOfNodes, 0);
-
-    for (size_t i = edgeStart; i < lines.size(); ++i) {
-        line = lines[i];
-        if (line.empty()) {
             continue;
         }
-        vector<string> values;
-        stringstream iss3(line);
-        copy(istream_iterator<string>(iss3), istream_iterator<string>(), back_inserter(values));
-        if (values.size() < 2) {
-            cerr << "Erro: linha de aresta invalida em '" << fileName << "' (linha " << (i + 1)
-                 << "): esperado 'origem destino peso'." << endl;
+
+        if (blankLines < 2)
+        {
+            continue;
+        }
+
+        // Primeira linha de aresta: o numero de nos ja esta fechado, entao a
+        // vizinhanca pode ser dimensionada. Antes isso acontecia entre as duas
+        // passadas sobre o arquivo inteiro; lendo em fluxo, e aqui.
+        if (!nodesClosed)
+        {
+            if (coordinateX.empty()) {
+                cerr << "Erro: nenhum no lido de '" << fileName << "'." << endl;
+                exit(EXIT_FAILURE);
+            }
+            numberOfNodes = (int) coordinateX.size();
+            // Construcao direta da vizinhanca de grau fixo. Sem matriz densa:
+            // com 40.000 nos uma matriz nos x nos passaria de 6 GB e nem
+            // alocaria.
+            neighbors.assign((size_t) numberOfNodes * Constants::SLOTS, -1);
+            degree.assign((size_t) numberOfNodes, 0);
+            nodesClosed = true;
+        }
+
+        int source_node = 0;
+        int destination_node = 0;
+        if (!readInt(cursor, source_node) || !readInt(cursor, destination_node))
+        {
+            cerr << "Erro: linha de aresta invalida em '" << fileName << "' (linha " << lineNumber
+                 << "): esperado 'origem destino'." << endl;
             exit(EXIT_FAILURE);
         }
-        int source_node = stoi(values[0]);
-        int destination_node = stoi(values[1]);
         if (source_node < 0 || source_node >= numberOfNodes ||
             destination_node < 0 || destination_node >= numberOfNodes) {
             cerr << "Erro: aresta (" << source_node << ", " << destination_node
@@ -321,7 +357,6 @@ void Game::initializeGame(const string& fileName)
         if (source_node == destination_node) {
             continue;
         }
-        edges.push_back({source_node, destination_node});
 
         degree[source_node]++;
         degree[destination_node]++;
@@ -336,8 +371,8 @@ void Game::initializeGame(const string& fileName)
             exit(EXIT_FAILURE);
         }
 
-        int deltaX = nodes[destination_node][0] - nodes[source_node][0];
-        int deltaY = nodes[destination_node][1] - nodes[source_node][1];
+        int deltaX = coordinateX[destination_node] - coordinateX[source_node];
+        int deltaY = coordinateY[destination_node] - coordinateY[source_node];
         int forwardSlot = claimSlot(source_node, cardinalSlot(deltaX, deltaY));
         int backwardSlot = claimSlot(destination_node, cardinalSlot(-deltaX, -deltaY));
         if (forwardSlot == -1 || backwardSlot == -1) {
@@ -347,6 +382,18 @@ void Game::initializeGame(const string& fileName)
         }
         neighbors[forwardSlot * numberOfNodes + source_node] = destination_node;
         neighbors[backwardSlot * numberOfNodes + destination_node] = source_node;
+    }
+
+    // Arquivo sem secao de arestas: o fechamento dos nos nao chegou a
+    // acontecer dentro do laco.
+    if (!nodesClosed)
+    {
+        if (coordinateX.empty()) {
+            cerr << "Erro: nenhum no lido de '" << fileName << "'." << endl;
+            exit(EXIT_FAILURE);
+        }
+        numberOfNodes = (int) coordinateX.size();
+        neighbors.assign((size_t) numberOfNodes * Constants::SLOTS, -1);
     }
 
     // ------------------------------------------------------------------
@@ -387,44 +434,50 @@ void Game::initializeGame(const string& fileName)
     }
 
     infectedAtNode.assign(numberOfNodes, 0);
-    touchedNodes.clear();
-
-    remapNodes();
 }
 
 void Game::buildInfectedAtNode()
 {
-    // Zera so os nos escritos no turno anterior. Com numberOfNodes muito maior
-    // que o numero de agentes, limpar o vetor inteiro custaria mais que o
-    // trabalho util (40.000 nos contra alguns milhares de agentes).
-    for (int node : touchedNodes)
-    {
-        infectedAtNode[node] = 0;
-    }
-    touchedNodes.clear();
+    // Bandeira, e nao contagem. checkSurroundings so pergunta se ha ALGUM
+    // infectado no no (player.cpp), nunca quantos - entao guardar a contagem
+    // era trabalho jogado fora.
+    //
+    // Aqui, sozinho, isso valeria pouco. A forma existe para que esta versao e
+    // a OpenMP facam exatamente o mesmo trabalho por agente: la a contagem era
+    // o que obrigava a passada a ser serial (`infectedAtNode[pos]++` de varias
+    // threads exige atomico), e a bandeira e o que a liberou. Comparar as duas
+    // so diz alguma coisa se o unico ponto diferente for o numero de threads.
+    // Pelo mesmo motivo o `if` antes da escrita fica: la ele evita a tempestade
+    // de coerencia, aqui e uma leitura de uma linha que a escrita ja traria.
+    //
+    // touchedNodes morreu junto: zerar o vetor inteiro e uma passada de
+    // numberOfNodes bytes, irrelevante perto de numberOfAgents.
+    fill(infectedAtNode.begin(), infectedAtNode.end(), 0);
 
-    // Uma unica passada sobre agents. DEAD nunca e INFECTED, entao nao
-    // transmite nem conta como contato.
-    for (const Player& agent : agents)
+    // Varre so quem esta NESTE jogo. DEAD nunca e INFECTED, entao nao transmite
+    // nem conta como contato.
+    int numberOfMembers = memberCount;
+    #pragma omp parallel for schedule(static)
+    for (int index = 0; index < numberOfMembers; index++)
     {
-        if (agent.state == States::INFECTED)
+        int id = members[index];
+        if (id < 0) { continue; }
+        if (pool->states[id] == States::INFECTED && infectedAtNode[pool->positions[id]] == 0)
         {
-            if (infectedAtNode[agent.position] == 0)
-            {
-                touchedNodes.emplace_back(agent.position);
-            }
-            infectedAtNode[agent.position]++;
+            infectedAtNode[pool->positions[id]] = 1;
         }
     }
 }
 
 vector<int> Game::countStates() const
 {
-    // Contagens tiradas da visao consolidada, nao dos agentes.
+    // So os presentes: quem viajou ja conta no jogo de destino.
     vector<int> counts(5, 0);
-    for (States state : agentsStatusVector)
+    for (int index = 0; index < memberCount; index++)
     {
-        counts[static_cast<int>(state)]++;
+        int id = members[index];
+        if (id < 0) { continue; }
+        counts[static_cast<int>(pool->states[id])]++;
     }
     return counts;
 }
@@ -434,125 +487,176 @@ vector<int> Game::countStatesByRegion() const
     // Layout: counts[regiao * 5 + estado]. A regiao de um agente e a do no em
     // que ele esta; um DEAD conta na regiao onde morreu.
     vector<int> counts((size_t) numberOfRegions * 5, 0);
-    for (int i = 0; i < (initialNumberHealthy + initialNumberInfected); i++)
+    for (int index = 0; index < memberCount; index++)
     {
-        int region = nodeRegion[agentsPositionVector[i]];
-        counts[region * 5 + static_cast<int>(agentsStatusVector[i])]++;
+        int id = members[index];
+        if (id < 0) { continue; }
+        int region = nodeRegion[pool->positions[id]];
+        counts[region * 5 + static_cast<int>(pool->states[id])]++;
     }
     return counts;
 }
 
-void Game::checkConservation(const vector<int>& counts) const
+void Game::step(int turn)
 {
-    int totalNumberOfThreads = initialNumberHealthy + initialNumberInfected;
-    int total = 0;
-    for (int count : counts)
-    {
-        total += count;
-    }
-    if (total != totalNumberOfThreads)
-    {
-        cerr << "Invariante de conservacao violada no turno " << turns << ": S+E+I+R+D = "
-             << total << " != " << totalNumberOfThreads << endl;
-        exit(EXIT_FAILURE);
-    }
-}
-
-void Game::step()
-{
-    // buildInfectedAtNode fica serial de proposito: e O(agentes), barato perto
-    // do laco abaixo, e paralelizar exigiria atomico no infectedAtNode[pos]++
-    // mais um merge por thread do touchedNodes. Serve tambem de barreira: o
-    // retrato dos infectados precisa estar pronto antes de qualquer agente
-    // comecar a ler.
+    // O retrato dos infectados precisa estar pronto antes de qualquer agente
+    // comecar a ler: quem se move neste turno nao muda o que os outros
+    // enxergam.
     buildInfectedAtNode();
 
-    // O laco de agentes e paralelo por construcao, nao por acaso:
+    // Este e o laco que a versao OpenMP paraleliza. Ele e paralelizavel por
+    // construcao, nao por acaso:
     //
     // - o RNG e indexado por (id do agente, turno), nunca por um fluxo
     //   sequencial compartilhado, entao os sorteios de um agente nao dependem
     //   da ordem em que os agentes rodam;
-    // - cada agente so escreve nos proprios campos e em
-    //   agentsPositionVector[id] / agentsStatusVector[id]. Os ids sao locais ao
-    //   jogo e disjuntos, entao nenhuma thread toca o indice de outra;
+    // - cada agente so escreve no slot id do pool, e os ids sao disjuntos;
     // - neighbors e infectedAtNode sao somente leitura durante o laco.
-    //   checkSurroundings apenas le o retrato tirado acima.
     //
-    // Por isso a saida e bit-a-bit identica a da versao sequencial com qualquer
-    // numero de threads. Se deixar de ser, ha race. Ver scripts/check_golden.sh.
+    // Por isso as duas versoes dao a mesma saida com qualquer numero de
+    // threads. Se deixarem de dar, ha race na outra.
     //
-    // O laco precisa ser indexado: range-for so vira forma canonica de OpenMP
-    // a partir da versao 5.0.
-    //
-    // schedule(guided), e nao static, por dois motivos que se somam:
-    //
-    // - o trabalho por agente nao e uniforme: DEAD sai na hora, EXPOSED e
-    //   INFECTED sorteiam mais que um SUSCEPTIBLE que so anda;
-    // - em CPU com nucleos heterogeneos (os 8 P-cores e 2 E-cores do Apple
-    //   Silicon aqui) fatias iguais fazem todo mundo esperar pelo nucleo lento.
-    //
-    // Medido com 1.000.000 de agentes e 100 turnos, em segundos:
-    //
-    //                 8 threads   10 threads
-    //   static          0,272       0,351
-    //   dynamic,4096    0,282       0,256
-    //   guided          0,261       0,271
-    //
-    // static e a pior com 10 threads justamente porque os E-cores seguram a
-    // barreira. guided fica perto do melhor nas duas colunas, entao e o padrao.
-    int numberOfAgents = (int) agents.size();
+    // O laco anda sobre members, e nao sobre a faixa de ids: com viagem entre
+    // jogos os dois deixam de coincidir, e quem manda e members.
+    // numberOfMembers e lido UMA vez, antes do laco. Quem chegar durante o
+    // turno entra depois deste limite e so e processado no turno seguinte -
+    // que e o comportamento desejado: o agente ja andou uma vez neste turno,
+    // no jogo de origem, e processa-lo de novo aqui seria um turno duplo.
+    int numberOfMembers = memberCount;
     #pragma omp parallel for schedule(guided)
-    for (int i = 0; i < numberOfAgents; i++)
+    for (int index = 0; index < numberOfMembers; index++)
     {
-        Player& agent = agents[i];
-        if (agent.state == States::DEAD)
+        int id = members[index];
+        // Slot de quem viajou para ca e ja saiu de novo, ou lixo de uma
+        // compactacao ainda nao feita.
+        if (id < 0)
         {
             continue;
         }
-        AgentRng rng = agentEngine(agent.id, turns);
-        agent.commonRoutine(neighbors, numberOfNodes, infectedAtNode, rng);
+        if (pool->states[id] == States::DEAD)
+        {
+            continue;
+        }
+        AgentRng rng = agentEngine(id, turn);
+        agentTurn(id, neighbors, numberOfNodes, infectedAtNode,
+                  pool->positions, pool->states, pool->counters, rng);
+
+        // A viagem vem depois do turno normal e usa sorteios a partir do
+        // indice 2: agentTurn consome 0 (o slot do passeio) e as vezes 1 (a
+        // probabilidade da transicao). Fixar o indice aqui faz os sorteios de
+        // viagem nao dependerem de qual caminho o agente tomou la dentro.
+        if (world != nullptr && world->size() > 1)
+        {
+            if (pool->travelLock[id] > 0)
+            {
+                pool->travelLock[id]--;
+            }
+            else
+            {
+                rng.index = 2;
+                if (rng.next() < Constants::TRAVEL_THRESHOLD)
+                {
+                    travel(id, index, rng);
+                }
+            }
+        }
     }
-    turns++;
+    turns = turn + 1;
 }
 
-void Game::run(int numberOfTurns)
+bool Game::travel(int id, int memberIndex, AgentRng& rng)
 {
-    isRunning = true;
-    chrono::steady_clock::time_point before = chrono::steady_clock::now();
-    double time = 0.0;
-    for (int turn = 0; turn < numberOfTurns; turn++)
+    // Sorteia entre os OUTROS jogos: tira este do baralho e desloca, em vez de
+    // sortear e repetir se cair em si mesmo - laco de rejeicao aqui seria
+    // divergencia de warp na versao de GPU, pelo mesmo motivo do passeio.
+    int numberOfGames = (int) world->size();
+    int destinationIndex = (int) rng.below((uint32_t) (numberOfGames - 1));
+    if (destinationIndex >= gameIndex)
     {
-        step();
+        destinationIndex++;
     }
-    cout << "turno,S,E,I,R,D" << endl;
-    vector<int> counts = countStates();
-    checkConservation(counts);
+    Game& destination = (*world)[destinationIndex];
 
-    cout << turns << "," << counts[static_cast<int>(States::SUSCEPTIBLE)]
-        << "," << counts[static_cast<int>(States::EXPOSED)]
-        << "," << counts[static_cast<int>(States::INFECTED)]
-        << "," << counts[static_cast<int>(States::RECOVERED)]
-        << "," << counts[static_cast<int>(States::DEAD)] << endl;
-    isRunning = false;
+    // O destino tem o proprio mapa, entao a posicao antiga nao vale la. O
+    // agente chega num no sorteado do grafo de destino.
+    int landing = (int) rng.below((uint32_t) destination.numberOfNodes);
 
-    chrono::steady_clock::time_point after = chrono::steady_clock::now();
-    time = chrono::duration<double>(after - before).count();
-    double elapsed = (time > 1e-9) ? time : 1e-9;
-    cerr << "tempo: " << fixed << setprecision(3) << elapsed << " s   "<< endl;
+    // Reserva o slot no destino ANTES de sair daqui. Se a lista de la estiver
+    // cheia, a viagem e recusada e o agente fica onde esta - nunca some.
+    int slot = destination.claimMemberSlot();
+    if (slot < 0)
+    {
+        return false;
+    }
+
+    destination.members[slot] = id;
+    pool->positions[id] = landing;
+    pool->travelLock[id] = (unsigned char) Constants::TRAVEL_LOCK_TURNS;
+
+    // So agora o slot de origem e liberado. Nesta ordem o agente existe nos
+    // dois lugares por um instante, e nunca em nenhum: uma contagem tirada no
+    // meio pode contar a mais, jamais a menos.
+    members[memberIndex] = -1;
+    return true;
+}
+
+int Game::claimMemberSlot()
+{
+    // Unico ponto em que uma thread escreve num campo de OUTRO jogo, entao e o
+    // unico que precisa de atomico. O incremento vem ANTES da conferencia de
+    // teto porque reservar e conferir tem que ser uma coisa so: duas threads
+    // que conferissem antes de incrementar poderiam passar as duas pelo mesmo
+    // ultimo slot.
+    //
+    // Se a lista estava cheia, memberCount passa da capacidade por um instante
+    // e a viagem e recusada sem escrever nada. compactMembers repoe o teto.
+    int slot;
+    #pragma omp atomic capture
+    slot = memberCount++;
+
+    if (slot >= (int) members.size())
+    {
+        return -1;
+    }
+    return slot;
+}
+
+void Game::compactMembers()
+{
+    // Roda entre turnos, com ninguem percorrendo a lista. Empurra os ids vivos
+    // para o inicio e encolhe memberCount; a capacidade continua a mesma.
+    //
+    // O teto e reposto aqui porque na versao OpenMP a reserva de slot
+    // incrementa antes de conferir: com a lista cheia, memberCount pode passar
+    // da capacidade por um instante. Os slots acima do teto nunca sao escritos,
+    // mas percorrer ate la seria leitura fora do vetor.
+    if (memberCount > (int) members.size())
+    {
+        memberCount = (int) members.size();
+    }
+
+    int write = 0;
+    for (int read = 0; read < memberCount; read++)
+    {
+        if (members[read] >= 0)
+        {
+            members[write] = members[read];
+            write++;
+        }
+    }
+    for (int index = write; index < memberCount; index++)
+    {
+        members[index] = -1;
+    }
+    memberCount = write;
 }
 
 void Game::reset()
 {
-    agents.clear();
+    // So o que e do ambiente. O pool e da Simulation, que o zera de uma vez -
+    // zerar aqui apagaria os agentes dos outros jogos.
     fill(infectedAtNode.begin(), infectedAtNode.end(), 0);
-    touchedNodes.clear();
-    fill(agentsPositionVector.begin(), agentsPositionVector.end(), 0);
-    fill(agentsStatusVector.begin(), agentsStatusVector.end(), States::SUSCEPTIBLE);
+    members.clear();
     turns = 0;
     isRunning = false;
-}
-
-void Game::quit()
-{
-    reset();
 }

@@ -27,8 +27,9 @@ class Game
         int numberOfNodes;
         int numberOfRegions;
         bool isRunning;
-        vector<int> infectedAtNode;
-        vector<int> touchedNodes;
+        // Bandeira por no, e nao contagem: o unico consumidor testa "> 0". E o
+        // que o kernel markInfected ja fazia; o caminho de CPU agora faz igual.
+        vector<unsigned char> infectedAtNode;
 
         // Estado dos agentes em SoA - um vetor por campo, e nao um
         // vector<Player>.
@@ -40,9 +41,13 @@ class Game
         // De quebra some a duplicacao que existia entre Player.position e
         // agentsPositionVector: agora ha uma fonte unica por campo, e a classe
         // de bug em que os dois dessincronizam deixa de ser possivel.
+        // 6 bytes por agente: 4 de posicao, 1 de estado, 1 de contador. O
+        // contador nunca passa de EXPOSED_TIME (7) e o estado vai de 0 a 4,
+        // entao os 4 bytes que cada um usava eram 3 desperdicados - por agente,
+        // por buffer, dos dois lados da fronteira.
         vector<int> agentsPositionVector;
         vector<States> agentsStatusVector;
-        vector<int> agentCounter;
+        vector<unsigned char> agentCounter;
         vector<vector<int>> nodes;
         vector<vector<int>> edges;
         vector<vector<int>> graphCoords;

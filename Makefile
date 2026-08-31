@@ -17,6 +17,30 @@ else
   HAVE_METAL =
 endif
 
+# CUDA: o nvcc raramente esta no PATH. CUDA_ARCH precisa bater com a placa -
+# sm_61 Pascal (Quadro P6000), sm_80 Ampere (A100), sm_90 Hopper. Toolkits a
+# partir do 13 nao geram mais codigo para Pascal nem Volta, entao o 12.x e o
+# que cobre placa antiga e A100 ao mesmo tempo.
+# Para sobrescrever: make genGraph_cuda CUDA_ARCH=sm_80
+NVCC      ?= $(shell command -v nvcc 2>/dev/null || echo /usr/local/cuda/bin/nvcc)
+CUDA_ARCH ?= sm_61
+HAVE_NVCC := $(shell test -x "$(NVCC)" && echo 1)
+ifeq ($(HAVE_NVCC),1)
+  CUDA_TARGET = genGraph_cuda
+else
+  CUDA_TARGET =
+endif
+
+# MPI: o mpicxx raramente esta no PATH em instalacao local, entao procura
+# tambem o prefixo comum. Para sobrescrever: make genGraph_mpi MPICXX=mpicxx
+MPICXX     ?= $(shell command -v mpicxx 2>/dev/null || echo /opt/openmpi/bin/mpicxx)
+HAVE_MPICXX := $(shell test -x "$(MPICXX)" && echo 1)
+ifeq ($(HAVE_MPICXX),1)
+  MPI_TARGET = genGraph_mpi
+else
+  MPI_TARGET =
+endif
+
 MTL_SRCS  = metal/main.cpp metal/game.cpp
 MTL_HDRS  = metal/game.h metal/enums.h metal/constants.h metal/rng.h metal/gpu.h
 MTL_FRAME = -framework Metal -framework Foundation
@@ -29,12 +53,12 @@ else
   METAL_TARGETS =
 endif
 
-BASE_SRCS = base/main.cpp base/game.cpp base/player.cpp
-BASE_HDRS = base/game.h base/player.h base/enums.h base/constants.h
-OMP_SRCS  = openmp/main.cpp openmp/game.cpp openmp/player.cpp
-OMP_HDRS  = openmp/game.h openmp/player.h openmp/enums.h openmp/constants.h
+BASE_SRCS = base/main.cpp base/simulation.cpp base/game.cpp base/player.cpp
+BASE_HDRS = base/simulation.h base/game.h base/player.h base/pool.h base/enums.h base/constants.h
+OMP_SRCS  = openmp/main.cpp openmp/simulation.cpp openmp/game.cpp openmp/player.cpp
+OMP_HDRS  = openmp/simulation.h openmp/game.h openmp/player.h openmp/pool.h openmp/enums.h openmp/constants.h
 
-all: GameC GameC_omp $(METAL_TARGETS) $(GENERATOR)
+all: GameC GameC_omp $(METAL_TARGETS) $(GENERATOR) $(MPI_TARGET) $(CUDA_TARGET)
 
 # Cada versao compila da propria pasta, sem fonte compartilhada: se uma quebrar,
 # a outra continua de pe.
@@ -67,15 +91,41 @@ kernels.metallib GameC_metal:
 
 endif
 
+# Os N grafos sao independentes, entao o gerador sai em duas versoes a partir
+# do mesmo fonte: threads OpenMP, ou um processo MPI por grafo. A escolha e de
+# quem roda, e nao do codigo - o laco e o mesmo nos dois casos.
 $(GENERATOR): tools/genGraph.cpp
-	$(CXX) $(CXXFLAGS) -o $@ tools/genGraph.cpp
+	$(CXX) $(CXXFLAGS) $(OMPFLAGS) -o $@ tools/genGraph.cpp $(OMPLIBS)
+
+genGraph_mpi: tools/genGraph.cpp
+	$(MPICXX) $(CXXFLAGS) -DUSE_MPI -o $@ tools/genGraph.cpp
+
+# A construcao do grafo vai para a GPU; a emissao do arquivo continua na CPU,
+# que e onde esta a maior parte do tempo. Ver docs/medicoes.md.
+#
+# CUDA_CCBIN existe porque o nvcc so aceita GCC ate certa versao (14, no 12.9)
+# e a distribuicao pode ter uma mais nova como padrao. Se g++-14 estiver
+# instalado, usa ele; senao deixa o nvcc escolher.
+CUDA_CCBIN ?= $(shell command -v g++-14 2>/dev/null)
+ifneq ($(CUDA_CCBIN),)
+  NVCCBIN = -ccbin $(CUDA_CCBIN)
+else
+  NVCCBIN =
+endif
+
+# tools/cuda_compat entra na frente do <math.h> do sistema: a glibc 2.41+
+# declara cospi/sinpi/rsqrt com noexcept e o cabecalho do CUDA declara sem, o
+# que impede compilar qualquer .cu. Ver o comentario la dentro.
+genGraph_cuda: tools/genGraph.cu tools/cuda_compat/math.h
+	$(NVCC) -std=c++17 -O2 -arch=$(CUDA_ARCH) $(NVCCBIN) -Itools/cuda_compat \
+	        -o $@ tools/genGraph.cu -Xcompiler "-Wall -Wextra"
 
 # O mesmo tests.cpp roda contra as duas versoes; quem escolhe e o -I.
-runTests: tests/tests.cpp base/game.cpp base/player.cpp $(BASE_HDRS)
-	$(CXX) $(CXXFLAGS) -Ibase -o $@ tests/tests.cpp base/game.cpp base/player.cpp
+runTests: tests/tests.cpp base/simulation.cpp base/game.cpp base/player.cpp $(BASE_HDRS)
+	$(CXX) $(CXXFLAGS) -Ibase -o $@ tests/tests.cpp base/simulation.cpp base/game.cpp base/player.cpp
 
-runTests_omp: tests/tests.cpp openmp/game.cpp openmp/player.cpp $(OMP_HDRS)
-	$(CXX) $(CXXFLAGS) $(OMPFLAGS) -Iopenmp -o $@ tests/tests.cpp openmp/game.cpp openmp/player.cpp $(OMPLIBS)
+runTests_omp: tests/tests.cpp openmp/simulation.cpp openmp/game.cpp openmp/player.cpp $(OMP_HDRS)
+	$(CXX) $(CXXFLAGS) $(OMPFLAGS) -Iopenmp -o $@ tests/tests.cpp openmp/simulation.cpp openmp/game.cpp openmp/player.cpp $(OMPLIBS)
 
 run: GameC
 	./GameC
@@ -95,6 +145,6 @@ endif
 
 clean:
 	rm -f GameC GameC_omp GameC_metal kernels.metallib runTests runTests_omp \
-	      $(GENERATOR) base/*.o openmp/*.o metal/*.air
+	      $(GENERATOR) genGraph_mpi genGraph_cuda base/*.o openmp/*.o metal/*.air
 
 .PHONY: all run test golden clean

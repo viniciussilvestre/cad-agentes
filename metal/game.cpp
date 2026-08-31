@@ -309,7 +309,7 @@ void Game::initializeGame(const string& fileName)
         copy(istream_iterator<string>(iss3), istream_iterator<string>(), back_inserter(values));
         if (values.size() < 2) {
             cerr << "Erro: linha de aresta invalida em '" << fileName << "' (linha " << (i + 1)
-                 << "): esperado 'origem destino peso'." << endl;
+                 << "): esperado 'origem destino'." << endl;
             exit(EXIT_FAILURE);
         }
         int source_node = stoi(values[0]);
@@ -389,21 +389,20 @@ void Game::initializeGame(const string& fileName)
     }
 
     infectedAtNode.assign(numberOfNodes, 0);
-    touchedNodes.clear();
 
     remapNodes();
 }
 
 void Game::buildInfectedAtNode()
 {
-    // Zera so os nos escritos no turno anterior. Com numberOfNodes muito maior
-    // que o numero de agentes, limpar o vetor inteiro custaria mais que o
-    // trabalho util (40.000 nos contra alguns milhares de agentes).
-    for (int node : touchedNodes)
-    {
-        infectedAtNode[node] = 0;
-    }
-    touchedNodes.clear();
+    // Bandeira, e nao contagem: o unico consumidor testa "> 0" (ver stepAgent),
+    // entao a contagem exata nunca e lida. E exatamente o que markInfected ja
+    // fazia na GPU; o caminho de CPU passa a fazer igual, para que os dois
+    // executem o mesmo trabalho por agente e continuem comparaveis.
+    //
+    // touchedNodes morreu junto: zerar o vetor inteiro e uma passada de
+    // numberOfNodes bytes, irrelevante perto de numberOfAgents.
+    fill(infectedAtNode.begin(), infectedAtNode.end(), 0);
 
     // Uma unica passada sobre os agentes. DEAD nunca e INFECTED, entao nao
     // transmite nem conta como contato.
@@ -411,12 +410,7 @@ void Game::buildInfectedAtNode()
     {
         if (agentsStatusVector[i] == States::INFECTED)
         {
-            int position = agentsPositionVector[i];
-            if (infectedAtNode[position] == 0)
-            {
-                touchedNodes.emplace_back(position);
-            }
-            infectedAtNode[position]++;
+            infectedAtNode[agentsPositionVector[i]] = 1;
         }
     }
 }
@@ -425,7 +419,7 @@ vector<int> Game::countStates() const
 {
     // Com a GPU ligada le direto do MTLBuffer. Memoria unificada: e o mesmo
     // endereco que o kernel escreveu, sem copia e sem transferencia.
-    const int* stateData = useGpu ? gpu.states() : (const int*) agentsStatusVector.data();
+    const unsigned char* stateData = useGpu ? gpu.states() : (const unsigned char*) agentsStatusVector.data();
     int numberOfAgents = (int) agentsStatusVector.size();
 
     vector<int> counts(5, 0);
@@ -440,7 +434,7 @@ vector<int> Game::countStatesByRegion() const
 {
     // Layout: counts[regiao * 5 + estado]. A regiao de um agente e a do no em
     // que ele esta; um DEAD conta na regiao onde morreu.
-    const int* stateData = useGpu ? gpu.states() : (const int*) agentsStatusVector.data();
+    const unsigned char* stateData = useGpu ? gpu.states() : (const unsigned char*) agentsStatusVector.data();
     const int* positionData = useGpu ? gpu.positions() : agentsPositionVector.data();
 
     vector<int> counts((size_t) numberOfRegions * 5, 0);
@@ -509,8 +503,10 @@ void Game::stepAgent(int i, AgentRng& rng)
         return;
     }
 
-    // EXPOSED ou INFECTED: avanca o cronograma da doenca.
-    int counter = agentCounter[i] + 1;
+    // EXPOSED ou INFECTED: avanca o cronograma da doenca. O contador zera em
+    // toda transicao e as duas janelas fecham em EXPOSED_TIME (7) e DEATH_TIME
+    // (3), entao nunca passa de 7 e cabe num byte.
+    unsigned char counter = (unsigned char) (agentCounter[i] + 1);
     uint32_t probability = rng.next();
 
     if (state == States::EXPOSED)
@@ -559,7 +555,7 @@ void Game::enableGpu(const string& metallibPath)
                                 numberOfNodes,
                                 neighbors,
                                 agentsPositionVector.data(),
-                                (const int*) agentsStatusVector.data(),
+                                (const unsigned char*) agentsStatusVector.data(),
                                 agentCounter.data(),
                                 baseSeed);
     if (!ready)
@@ -657,7 +653,6 @@ void Game::run(int numberOfTurns)
 void Game::reset()
 {
     fill(infectedAtNode.begin(), infectedAtNode.end(), 0);
-    touchedNodes.clear();
     fill(agentsPositionVector.begin(), agentsPositionVector.end(), 0);
     fill(agentsStatusVector.begin(), agentsStatusVector.end(), States::SUSCEPTIBLE);
     fill(agentCounter.begin(), agentCounter.end(), 0);

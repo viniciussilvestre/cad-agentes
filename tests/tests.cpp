@@ -5,7 +5,7 @@
 
 // Sem caminho de pasta: quem escolhe a versao testada e o -I do build, entao o
 // mesmo arquivo roda contra base/ e contra openmp/.
-#include "game.h"
+#include "simulation.h"
 #include "constants.h"
 #include <algorithm>
 #include <cmath>
@@ -79,10 +79,11 @@ static bool testUniformStationary()
     string mapFile = "test_grid_stationary.txt";
     writeGridMap(mapFile, WIDTH, HEIGHT);
 
-    Game game(1, 0);
-    game.setSeed(12345);
-    game.initializeGame(mapFile);
-    game.startAllDumbThreads();
+    Simulation simulation(1, 1, 0);
+    simulation.setSeed(12345);
+    simulation.initialize(mapFile);
+    simulation.start();
+    Game& game = simulation.games[0];
 
     // Checagem exata, sem ruido amostral: a matriz de transicao P tem
     // P[i][j] = (numero de slots de i apontando para j) / SLOTS. Se todas as
@@ -110,8 +111,8 @@ static bool testUniformStationary()
     vector<long long> visits(numberOfNodes, 0);
     for (int turn = 0; turn < TURNS; turn++)
     {
-        game.step();
-        visits[game.agents[0].position]++;
+        simulation.step();
+        visits[simulation.pool.positions[0]]++;
     }
     remove(mapFile.c_str());
 
@@ -150,15 +151,15 @@ static bool testLaziness()
     string mapFile = "test_grid_laziness.txt";
     writeGridMap(mapFile, WIDTH, HEIGHT);
 
-    Game game(AGENTS, 0);
-    game.setSeed(999);
-    game.initializeGame(mapFile);
-    game.startAllDumbThreads();
+    Simulation simulation(1, AGENTS, 0);
+    simulation.setSeed(999);
+    simulation.initialize(mapFile);
+    simulation.start();
 
     vector<int> initialParity(AGENTS);
     for (int i = 0; i < AGENTS; i++)
     {
-        initialParity[i] = gridParity(game.agents[i].position, WIDTH);
+        initialParity[i] = gridParity(simulation.pool.positions[i], WIDTH);
     }
 
     int turnsWithBothParities = 0;
@@ -166,12 +167,12 @@ static bool testLaziness()
     vector<int> atNodeByInitialParity((size_t) WIDTH * HEIGHT * 2, 0);
     for (int turn = 0; turn < TURNS; turn++)
     {
-        game.step();
+        simulation.step();
         fill(atNodeByInitialParity.begin(), atNodeByInitialParity.end(), 0);
         int currentByParity[2] = {0, 0};
         for (int i = 0; i < AGENTS; i++)
         {
-            int position = game.agents[i].position;
+            int position = simulation.pool.positions[i];
             currentByParity[gridParity(position, WIDTH)]++;
             atNodeByInitialParity[position * 2 + initialParity[i]]++;
         }
@@ -201,10 +202,14 @@ static bool testLaziness()
     return passed;
 }
 
-// Dois jogos no mesmo processo precisam ser independentes. Com o contador de id
-// global que existia antes, os agentes do segundo jogo nasciam com id >= N e
-// escreviam fora dos limites dos proprios vetores consolidados: o segundo jogo
-// divergia do primeiro quando nao corrompia o heap.
+// Duas simulacoes no mesmo processo precisam ser independentes. Com o contador
+// de id global que existia antes, os agentes da segunda nasciam com id >= N e
+// escreviam fora dos limites dos proprios vetores: a segunda divergia da
+// primeira quando nao corrompia o heap.
+//
+// Dois JOGOS dentro da mesma Simulation nao sao independentes por construcao -
+// dividem o pool e, com viagem ligada, trocam agentes. Quem isola e a
+// Simulation, que e onde o pool mora; e por isso que o teste usa duas delas.
 static bool testTwoGamesAreIndependent()
 {
     const int WIDTH = 8;
@@ -215,20 +220,23 @@ static bool testTwoGamesAreIndependent()
     string mapFile = "test_grid_twogames.txt";
     writeGridMap(mapFile, WIDTH, HEIGHT);
 
-    Game first(HEALTHY, INFECTED);
+    Simulation first(1, HEALTHY, INFECTED);
     first.setSeed(2024);
-    first.initializeGame(mapFile);
-    first.startAllDumbThreads();
+    first.initialize(mapFile);
+    first.start();
 
-    Game second(HEALTHY, INFECTED);
+    Simulation second(1, HEALTHY, INFECTED);
     second.setSeed(2024);
-    second.initializeGame(mapFile);
-    second.startAllDumbThreads();
+    second.initialize(mapFile);
+    second.start();
 
-    bool idsInRange = true;
-    for (const Player& agent : second.agents)
+    // O id de um agente e a sua posicao no pool da propria simulacao. O que se
+    // verifica aqui e que a segunda indexa o proprio pool: tamanho certo e toda
+    // posicao dentro do grafo dela.
+    bool idsInRange = (second.pool.size() == HEALTHY + INFECTED);
+    for (int position : second.pool.positions)
     {
-        if (agent.id < 0 || agent.id >= (int) second.agentsStatusVector.size())
+        if (position < 0 || position >= second.games[0].numberOfNodes)
         {
             idsInRange = false;
         }
@@ -256,9 +264,9 @@ static bool testTwoGamesAreIndependent()
     bool conserved = (total == HEALTHY + INFECTED);
 
     bool passed = idsInRange && identical && conserved;
-    cout << "testTwoGamesAreIndependent: 2 jogos, " << (HEALTHY + INFECTED) << " agentes cada, "
+    cout << "testTwoGamesAreIndependent: 2 simulacoes, " << (HEALTHY + INFECTED) << " agentes cada, "
          << TURNS << " turnos" << endl;
-    cout << "  ids do segundo jogo dentro de [0, " << second.agentsStatusVector.size() << ")"
+    cout << "  a segunda indexa o proprio pool, " << second.pool.size() << " agentes"
          << "  ->  " << (idsInRange ? "ok" : "FALHOU") << endl;
     cout << "  mesma semente da as mesmas contagens em todo turno  ->  "
          << (identical ? "ok" : "FALHOU") << endl;

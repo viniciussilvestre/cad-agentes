@@ -56,8 +56,8 @@ bool GpuRunner::initialize(const string& metallibPath,
                            int numberOfNodes,
                            const vector<int>& neighbors,
                            const int* agentPosition,
-                           const int* agentState,
-                           const int* agentCounter,
+                           const unsigned char* agentState,
+                           const unsigned char* agentCounter,
                            unsigned int baseSeed)
 {
     @autoreleasepool {
@@ -106,15 +106,20 @@ bool GpuRunner::initialize(const string& metallibPath,
         // memoria fisica, entao "subir para a GPU" e so alocar aqui e escrever.
         // Nao existe copia por barramento como numa placa discreta, e por isso
         // o host pode ler as contagens todo turno sem custo de transferencia.
-        const NSUInteger agentBytes = (NSUInteger) numberOfAgents * sizeof(int);
+        // Estado e contador tem um byte cada; so a posicao precisa de int. Sao
+        // 6 bytes por agente em vez de 12 - e como o laco de agentes e limitado
+        // por memoria e nao por aritmetica, o que se economiza aqui e tempo, e
+        // nao so RAM.
+        const NSUInteger positionBytes = (NSUInteger) numberOfAgents * sizeof(int);
+        const NSUInteger byteFieldBytes = (NSUInteger) numberOfAgents * sizeof(unsigned char);
         impl->positionBuffer = [impl->device newBufferWithBytes:agentPosition
-                                                         length:agentBytes
+                                                         length:positionBytes
                                                         options:MTLResourceStorageModeShared];
         impl->stateBuffer = [impl->device newBufferWithBytes:agentState
-                                                      length:agentBytes
+                                                      length:byteFieldBytes
                                                      options:MTLResourceStorageModeShared];
         impl->counterBuffer = [impl->device newBufferWithBytes:agentCounter
-                                                        length:agentBytes
+                                                        length:byteFieldBytes
                                                        options:MTLResourceStorageModeShared];
         impl->neighborsBuffer = [impl->device newBufferWithBytes:neighbors.data()
                                                           length:neighbors.size() * sizeof(int)
@@ -145,10 +150,11 @@ void GpuRunner::runTurn(int turn)
 
         // 1. Zera infectedAtNode inteiro.
         //
-        // A CPU limpa so os nos tocados no turno anterior (touchedNodes), porque
-        // sequencialmente vale a pena. Aqui nao: um fill de alguns milhares de
-        // inteiros pela unidade de blit custa microssegundos e dispensa manter
-        // a lista esparsa, que na GPU exigiria uma escrita atomica em append.
+        // Um fill de alguns milhares de inteiros pela unidade de blit custa
+        // microssegundos e dispensa manter a lista esparsa dos nos sujos, que
+        // aqui exigiria uma escrita atomica em append. O caminho de CPU tambem
+        // deixou de manter essa lista, pelo mesmo motivo: com muitos agentes,
+        // zerar numberOfNodes bytes some perto de varrer numberOfAgents.
         id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
         [blit fillBuffer:impl->infectedBuffer
                    range:NSMakeRange(0, [impl->infectedBuffer length])
@@ -195,7 +201,7 @@ const int* GpuRunner::positions() const
     return (const int*) [impl->positionBuffer contents];
 }
 
-const int* GpuRunner::states() const
+const unsigned char* GpuRunner::states() const
 {
-    return (const int*) [impl->stateBuffer contents];
+    return (const unsigned char*) [impl->stateBuffer contents];
 }

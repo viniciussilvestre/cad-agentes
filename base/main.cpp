@@ -1,15 +1,36 @@
-#include "game.h"
+#include "simulation.h"
 #include "constants.h"
 #include <cstdlib>
 
+// ---------------------------------------------------------------------------
+// Configuracao por jogo, escrita aqui na mao.
+//
+// Sao coisas que nao cabem bem numa flag - um mapa e uma semente por ambiente,
+// em ordem. Deixe vazio para que todos os jogos usem --map e --seed.
+//
+// Sem validacao de proposito: quem edita estas listas e quem compila.
+// ---------------------------------------------------------------------------
+static const vector<string> gameMaps = {
+    "map_0.txt", "map_1.txt", "map_2.txt", "map_3.txt", "map_4.txt", "map_5.txt", "map_6.txt", 
+    "map_7.txt", "map_8.txt", "map_9.txt", "map_10.txt", "map_11.txt", "map_12.txt", "map_13.txt", 
+    "map_14.txt", "map_15.txt", "map_16.txt", "map_17.txt", "map_18.txt", "map_19.txt", "map_20.txt"
+};
+
+static const vector<unsigned int> gameSeeds = {
+    4, 87, 12, 93, 41, 65, 18, 30, 99, 52, 7, 76, 23, 88, 34, 
+    11, 62, 45, 90, 19, 81
+};
+
 int main(int argc, char** argv)
 {
-    int initialNumberHealthy = 90000000;
-    int initialNumberInfected = 10000000;
-    int numberOfTurns = 1200;
+    // --agents e --infected sao TOTAIS, divididos igualmente entre os jogos:
+    // com --games 4 --agents 1000, sao 250 saudaveis por jogo.
+    int initialNumberHealthy = 1340476;
+    int initialNumberInfected = 100000;
+    int numberOfTurns = 1000;
+    int numberOfGames = 1;
     unsigned int seed = Constants::DEFAULT_SEED;
     string mapFile = "map.txt";
-    string csvFile;
     SeedMode seedMode = SeedMode::Uniform;
     int seedTarget = 0;
 
@@ -22,7 +43,7 @@ int main(int argc, char** argv)
         else if (flag == "--infected" && hasValue) { initialNumberInfected = atoi(argv[++i]); }
         else if (flag == "--turns" && hasValue) { numberOfTurns = atoi(argv[++i]); }
         else if (flag == "--seed" && hasValue) { seed = (unsigned int) strtoul(argv[++i], nullptr, 10); }
-        else if (flag == "--out-csv" && hasValue) { csvFile = argv[++i]; }
+        else if (flag == "--games" && hasValue) { numberOfGames = atoi(argv[++i]); }
         else if (flag == "--seed-target" && hasValue) { seedTarget = atoi(argv[++i]); }
         else if (flag == "--seed-mode" && hasValue)
         {
@@ -43,15 +64,17 @@ int main(int argc, char** argv)
         }
     }
 
-    Game game(initialNumberHealthy, initialNumberInfected);
-    game.setSeed(seed);
-    game.setSeedMode(seedMode, seedTarget);
-    if (!csvFile.empty())
-    {
-        game.setCsvOutput(csvFile);
-    }
-    game.initializeGame(mapFile);
-    game.startAllDumbThreads();
-    game.run(numberOfTurns);
+    Simulation simulation(numberOfGames, initialNumberHealthy, initialNumberInfected);
+
+    if (gameSeeds.empty()) { simulation.setSeed(seed); }
+    else { simulation.setSeeds(gameSeeds); }
+
+    simulation.setSeedMode(seedMode, seedTarget);
+
+    if (gameMaps.empty()) { simulation.initialize(mapFile); }
+    else { simulation.setMaps(gameMaps); simulation.initialize(); }
+
+    simulation.start();
+    simulation.run(numberOfTurns);
     return 0;
 }

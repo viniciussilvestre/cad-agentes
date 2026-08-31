@@ -9,10 +9,11 @@ runTests_omp
 kernels.metallib
 *.air
 genGraph
+genGraph_cuda
+genGraph_mpi
+map_*.txt
 *.o
 
 # saida do cmake
 cmake-build-debug/
 build/
-
-metal/
