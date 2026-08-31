@@ -144,7 +144,7 @@ void Simulation::step()
     }
     else
     {
-        #pragma omp parallel for schedule(static) num_threads(Constants::NUMBER_OF_OUTER_THREADS)
+        #pragma omp parallel for
         for (int index = 0; index < numberOfGames; index++)
         {
             games[index].step(turns);
@@ -155,7 +155,7 @@ void Simulation::step()
     // estao sendo lidas e recebendo chegadas, e so aqui e seguro mexer nelas.
     // Esta barreira e o que torna a compactacao segura - por isso ela nao pode
     // subir para dentro de Game::step.
-    #pragma omp parallel for schedule(static) num_threads(Constants::NUMBER_OF_OUTER_THREADS)
+    #pragma omp parallel for
     for (int index = 0; index < numberOfGames; index++)
     {
         games[index].compactMembers();

@@ -25,9 +25,9 @@ int main(int argc, char** argv)
 {
     // --agents e --infected sao TOTAIS, divididos igualmente entre os jogos:
     // com --games 4 --agents 1000, sao 250 saudaveis por jogo.
-    int initialNumberHealthy = 1340476;
-    int initialNumberInfected = 100000;
-    int numberOfTurns = 1000;
+    int initialNumberHealthy = 29250000;
+    int initialNumberInfected = 1000000;
+    int numberOfTurns = 800;
     int numberOfGames = 1;
     unsigned int seed = Constants::DEFAULT_SEED;
     string mapFile = "map.txt";

@@ -523,7 +523,7 @@ void Game::step(int turn)
     // que e o comportamento desejado: o agente ja andou uma vez neste turno,
     // no jogo de origem, e processa-lo de novo aqui seria um turno duplo.
     int numberOfMembers = memberCount;
-    #pragma omp parallel for schedule(guided)
+    #pragma omp parallel for
     for (int index = 0; index < numberOfMembers; index++)
     {
         int id = members[index];
