@@ -144,7 +144,7 @@ void Simulation::step()
     }
     else
     {
-        #pragma omp parallel for schedule(static)
+        #pragma omp parallel for schedule(static) num_threads(Constants::NUMBER_OF_OUTER_THREADS)
         for (int index = 0; index < numberOfGames; index++)
         {
             games[index].step(turns);
@@ -155,7 +155,7 @@ void Simulation::step()
     // estao sendo lidas e recebendo chegadas, e so aqui e seguro mexer nelas.
     // Esta barreira e o que torna a compactacao segura - por isso ela nao pode
     // subir para dentro de Game::step.
-    #pragma omp parallel for schedule(static)
+    #pragma omp parallel for schedule(static) num_threads(Constants::NUMBER_OF_OUTER_THREADS)
     for (int index = 0; index < numberOfGames; index++)
     {
         games[index].compactMembers();
@@ -201,6 +201,36 @@ void Simulation::run(int numberOfTurns)
         step();
     }
     chrono::steady_clock::time_point after = chrono::steady_clock::now();
+
+    // Uma linha por ambiente. Com viagem ligada, o total de um jogo muda de
+    // turno para turno mesmo sem ninguem adoecer - quem conserva e a soma, e
+    // por isso a conferencia e feita sobre o pool inteiro logo abaixo.
+    //
+    // A contagem e paralela e a impressao e serial: sao O(agentes) por jogo,
+    // mas a saida precisa sair em ordem de jogo para ser comparavel.
+    int numberOfGames = (int) games.size();
+    vector<vector<int>> countsPerGame((size_t) numberOfGames);
+
+    #pragma omp parallel for schedule(dynamic)
+    for (int index = 0; index < numberOfGames; index++)
+    {
+        countsPerGame[(size_t) index] = games[index].countStates();
+    }
+
+    cout << "jogo,turno,S,E,I,R,D" << endl;
+    for (int index = 0; index < numberOfGames; index++)
+    {
+        const vector<int>& counts = countsPerGame[(size_t) index];
+        cout << index << "," << turns
+             << "," << counts[static_cast<int>(States::SUSCEPTIBLE)]
+             << "," << counts[static_cast<int>(States::EXPOSED)]
+             << "," << counts[static_cast<int>(States::INFECTED)]
+             << "," << counts[static_cast<int>(States::RECOVERED)]
+             << "," << counts[static_cast<int>(States::DEAD)] << "\n";
+    }
+    cout.flush();
+
+    checkConservation(countStates());
 
     double time = chrono::duration<double>(after - before).count();
     double elapsed = (time > 1e-9) ? time : 1e-9;

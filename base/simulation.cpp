@@ -153,6 +153,24 @@ void Simulation::run(int numberOfTurns)
     }
     chrono::steady_clock::time_point after = chrono::steady_clock::now();
 
+    // Uma linha por ambiente. Com viagem ligada, o total de um jogo muda de
+    // turno para turno mesmo sem ninguem adoecer - quem conserva e a soma, e
+    // por isso a conferencia e feita sobre o pool inteiro logo abaixo.
+    cout << "jogo,turno,S,E,I,R,D" << endl;
+    for (size_t index = 0; index < games.size(); index++)
+    {
+        vector<int> counts = games[index].countStates();
+        cout << index << "," << turns
+             << "," << counts[static_cast<int>(States::SUSCEPTIBLE)]
+             << "," << counts[static_cast<int>(States::EXPOSED)]
+             << "," << counts[static_cast<int>(States::INFECTED)]
+             << "," << counts[static_cast<int>(States::RECOVERED)]
+             << "," << counts[static_cast<int>(States::DEAD)] << "\n";
+    }
+    cout.flush();
+
+    checkConservation(countStates());
+
     double time = chrono::duration<double>(after - before).count();
     double elapsed = (time > 1e-9) ? time : 1e-9;
     cerr << "tempo: " << fixed << setprecision(3) << elapsed << " s   " << endl;
