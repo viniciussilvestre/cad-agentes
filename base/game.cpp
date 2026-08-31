@@ -153,46 +153,6 @@ uint64_t Game::hashSeed(unsigned int seed, int id, int turn)
     return hash;
 }
 
-pair<int, int> Game::mapNodes(int x, int y, int x_min, int x_max, int y_min, int y_max) const
-{
-    int range_x = x_max - x_min;
-    int range_y = y_max - y_min;
-    int new_x = Constants::lowerResolutionX + (((x - x_min) * ((Constants::resolutionX - 62) - Constants::lowerResolutionX)) / range_x);
-    int new_y = Constants::lowerResolutionY + (((y - y_min) * ((Constants::resolutionY - 60) - Constants::lowerResolutionY)) / range_y);
-    return make_pair(new_x, new_y);
-}
-
-void Game::remapNodes()
-{
-    for (vector<int> & node: nodes)
-    {
-        int x;
-        int y;
-        tie(x, y) = mapNodes(node[0], node[1], min_x_coordinate, max_x_coordinate, min_y_coordinate, max_y_coordinate);
-        node[0] = x;
-        node[1] = y;
-        graphCoords.push_back({node[0], node[1]});
-    }
-
-    for (vector<int> & edge: edges)
-    {
-        int edgeSource = edge[0];
-        int edgeDestination = edge[1];
-        if (edgeSource < 0 || edgeSource >= (int) nodes.size())
-            continue;
-        if (edgeDestination < 0 || edgeDestination >= (int) nodes.size())
-            continue;
-        int xSource = nodes[edgeSource][0];
-        int ySource = nodes[edgeSource][1];
-        int xDestination = nodes[edgeDestination][0];
-        int yDestination = nodes[edgeDestination][1];
-        Point source = {xSource, ySource};
-        Point destination = {xDestination, yDestination};
-        Edge connection = {source, destination};
-        graphEdges.emplace_back(connection);
-    }
-}
-
 // Escolhe o slot cardinal de uma aresta a partir do deslocamento entre as
 // coordenadas dos dois nos. A regra e simetrica: se v esta a direita de u,
 // entao u esta a esquerda de v, logo os dois lados concordam sobre o eixo e
@@ -232,8 +192,40 @@ int Game::claimSlot(int node, int preferredSlot)
     return -1;
 }
 
+// Le um inteiro com sinal a partir de cursor, pulando brancos antes dele.
+// Devolve false quando nao ha numero nenhum dali em diante.
+//
+// Substitui stringstream + istream_iterator, que montava um vector<string> por
+// LINHA. Num mapa de 5500x5500 sao 91 milhoes de linhas, e era isso, e nao o
+// grafo, que dominava o tempo e a memoria da carga.
+static bool readInt(const char*& cursor, int& value)
+{
+    while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r')
+    {
+        cursor++;
+    }
+    bool negative = false;
+    if (*cursor == '-') { negative = true; cursor++; }
+    else if (*cursor == '+') { cursor++; }
+    if (*cursor < '0' || *cursor > '9')
+    {
+        return false;
+    }
+    long long parsed = 0;
+    while (*cursor >= '0' && *cursor <= '9')
+    {
+        parsed = parsed * 10 + (*cursor - '0');
+        cursor++;
+    }
+    value = (int) (negative ? -parsed : parsed);
+    return true;
+}
+
 void Game::initializeGame(const string& fileName)
 {
+    // O arquivo e lido em fluxo, uma linha por vez, e nao carregado inteiro
+    // para um vector<string>. Guardar as 91 milhoes de linhas de um mapa de
+    // 5500x5500 custava mais memoria que o grafo que sai delas.
     ifstream file(fileName);
     if (!file.is_open())
     {
@@ -241,66 +233,76 @@ void Game::initializeGame(const string& fileName)
         exit(EXIT_FAILURE);
     }
 
-    vector<string> lines;
     string line;
-    while (getline(file, line)) {
-        lines.push_back(line);
-    }
-    file.close();
-
-    if (lines.empty()) {
+    if (!getline(file, line))
+    {
         cerr << "Erro: o arquivo do grafo '" << fileName << "' esta vazio." << endl;
         exit(EXIT_FAILURE);
     }
 
-    vector<string> items;
-    stringstream iss(lines[0]);
-    copy(istream_iterator<string>(iss), istream_iterator<string>(), back_inserter(items));
-    if (items.size() < 3) {
+    int declaredNodes = 0;
+    int declaredEdges = 0;
+    const char* cursor = line.c_str();
+    if (!readInt(cursor, declaredNodes) || !readInt(cursor, declaredEdges) ||
+        !readInt(cursor, numberOfRegions))
+    {
         cerr << "Erro: cabecalho invalido em '" << fileName
              << "': esperado 'numero_de_nos numero_de_arestas numero_de_regioes'." << endl;
         exit(EXIT_FAILURE);
     }
-    numberOfRegions = stoi(items[2]);
     if (numberOfRegions < 1) {
         cerr << "Erro: numero de regioes invalido em '" << fileName << "': " << numberOfRegions << "." << endl;
         exit(EXIT_FAILURE);
     }
 
-    // Primeira passada: os nos. As coordenadas cruas sao guardadas antes de
-    // remapNodes() porque a classificacao cardinal das arestas depende delas -
-    // o remapeamento escala X e Y por fatores diferentes e distorceria o eixo
-    // dominante.
-    int counter = 0;
-    size_t edgeStart = lines.size();
-    for (size_t i = 1; i < lines.size(); ++i) {
-        line = lines[i];
-        if (line.empty()) {
-            counter++;
-            if (counter == 2) {
-                edgeStart = i + 1;
-                break;
-            }
+    // As coordenadas sao LOCAIS: servem so para classificar a direcao das
+    // arestas enquanto o arquivo e lido, e morrem com a funcao. O
+    // remapeamento para tela que existia aqui produzia dois vetores que
+    // ninguem lia.
+    vector<int> coordinateX;
+    vector<int> coordinateY;
+    vector<int> degree;
+    if (declaredNodes > 0)
+    {
+        coordinateX.reserve((size_t) declaredNodes);
+        coordinateY.reserve((size_t) declaredNodes);
+        nodeRegion.reserve((size_t) declaredNodes);
+    }
+
+    int blankLines = 0;
+    size_t lineNumber = 1;
+    bool nodesClosed = false;
+
+    while (getline(file, line))
+    {
+        lineNumber++;
+        if (line.empty())
+        {
+            blankLines++;
             continue;
         }
-        if (counter == 1) {
-            vector<string> values;
-            stringstream iss2(line);
-            copy(istream_iterator<string>(iss2), istream_iterator<string>(), back_inserter(values));
-            if (values.size() < 3) {
-                cerr << "Erro: linha de no invalida em '" << fileName << "' (linha " << (i + 1)
+
+        cursor = line.c_str();
+
+        if (blankLines == 1)
+        {
+            int x_coordinate = 0;
+            int y_coordinate = 0;
+            int region = 0;
+            if (!readInt(cursor, x_coordinate) || !readInt(cursor, y_coordinate) ||
+                !readInt(cursor, region))
+            {
+                cerr << "Erro: linha de no invalida em '" << fileName << "' (linha " << lineNumber
                      << "): esperado 'x y regiao'." << endl;
                 exit(EXIT_FAILURE);
             }
-            int x_coordinate = stoi(values[0]);
-            int y_coordinate = stoi(values[1]);
-            int region = stoi(values[2]);
             if (region < 0 || region >= numberOfRegions) {
-                cerr << "Erro: no " << nodes.size() << " tem regiao " << region
+                cerr << "Erro: no " << coordinateX.size() << " tem regiao " << region
                      << ", fora de [0, " << numberOfRegions << ")." << endl;
                 exit(EXIT_FAILURE);
             }
-            nodes.push_back({x_coordinate, y_coordinate});
+            coordinateX.push_back(x_coordinate);
+            coordinateY.push_back(y_coordinate);
             nodeRegion.push_back(region);
             if (x_coordinate > max_x_coordinate)
                 max_x_coordinate = x_coordinate;
@@ -310,35 +312,40 @@ void Game::initializeGame(const string& fileName)
                 min_x_coordinate = x_coordinate;
             if (y_coordinate < min_y_coordinate)
                 min_y_coordinate = y_coordinate;
-        }
-    }
-
-    if (nodes.empty()) {
-        cerr << "Erro: nenhum no lido de '" << fileName << "'." << endl;
-        exit(EXIT_FAILURE);
-    }
-    numberOfNodes = (int) nodes.size();
-
-    // Construcao direta da vizinhanca de grau fixo. Sem matriz densa: com
-    // 40.000 nos uma matriz nos x nos passaria de 6 GB e nem alocaria.
-    neighbors.assign((size_t) numberOfNodes * Constants::SLOTS, -1);
-    vector<int> degree(numberOfNodes, 0);
-
-    for (size_t i = edgeStart; i < lines.size(); ++i) {
-        line = lines[i];
-        if (line.empty()) {
             continue;
         }
-        vector<string> values;
-        stringstream iss3(line);
-        copy(istream_iterator<string>(iss3), istream_iterator<string>(), back_inserter(values));
-        if (values.size() < 2) {
-            cerr << "Erro: linha de aresta invalida em '" << fileName << "' (linha " << (i + 1)
+
+        if (blankLines < 2)
+        {
+            continue;
+        }
+
+        // Primeira linha de aresta: o numero de nos ja esta fechado, entao a
+        // vizinhanca pode ser dimensionada. Antes isso acontecia entre as duas
+        // passadas sobre o arquivo inteiro; lendo em fluxo, e aqui.
+        if (!nodesClosed)
+        {
+            if (coordinateX.empty()) {
+                cerr << "Erro: nenhum no lido de '" << fileName << "'." << endl;
+                exit(EXIT_FAILURE);
+            }
+            numberOfNodes = (int) coordinateX.size();
+            // Construcao direta da vizinhanca de grau fixo. Sem matriz densa:
+            // com 40.000 nos uma matriz nos x nos passaria de 6 GB e nem
+            // alocaria.
+            neighbors.assign((size_t) numberOfNodes * Constants::SLOTS, -1);
+            degree.assign((size_t) numberOfNodes, 0);
+            nodesClosed = true;
+        }
+
+        int source_node = 0;
+        int destination_node = 0;
+        if (!readInt(cursor, source_node) || !readInt(cursor, destination_node))
+        {
+            cerr << "Erro: linha de aresta invalida em '" << fileName << "' (linha " << lineNumber
                  << "): esperado 'origem destino'." << endl;
             exit(EXIT_FAILURE);
         }
-        int source_node = stoi(values[0]);
-        int destination_node = stoi(values[1]);
         if (source_node < 0 || source_node >= numberOfNodes ||
             destination_node < 0 || destination_node >= numberOfNodes) {
             cerr << "Erro: aresta (" << source_node << ", " << destination_node
@@ -348,7 +355,6 @@ void Game::initializeGame(const string& fileName)
         if (source_node == destination_node) {
             continue;
         }
-        edges.push_back({source_node, destination_node});
 
         degree[source_node]++;
         degree[destination_node]++;
@@ -363,8 +369,8 @@ void Game::initializeGame(const string& fileName)
             exit(EXIT_FAILURE);
         }
 
-        int deltaX = nodes[destination_node][0] - nodes[source_node][0];
-        int deltaY = nodes[destination_node][1] - nodes[source_node][1];
+        int deltaX = coordinateX[destination_node] - coordinateX[source_node];
+        int deltaY = coordinateY[destination_node] - coordinateY[source_node];
         int forwardSlot = claimSlot(source_node, cardinalSlot(deltaX, deltaY));
         int backwardSlot = claimSlot(destination_node, cardinalSlot(-deltaX, -deltaY));
         if (forwardSlot == -1 || backwardSlot == -1) {
@@ -374,6 +380,18 @@ void Game::initializeGame(const string& fileName)
         }
         neighbors[forwardSlot * numberOfNodes + source_node] = destination_node;
         neighbors[backwardSlot * numberOfNodes + destination_node] = source_node;
+    }
+
+    // Arquivo sem secao de arestas: o fechamento dos nos nao chegou a
+    // acontecer dentro do laco.
+    if (!nodesClosed)
+    {
+        if (coordinateX.empty()) {
+            cerr << "Erro: nenhum no lido de '" << fileName << "'." << endl;
+            exit(EXIT_FAILURE);
+        }
+        numberOfNodes = (int) coordinateX.size();
+        neighbors.assign((size_t) numberOfNodes * Constants::SLOTS, -1);
     }
 
     // ------------------------------------------------------------------
@@ -414,8 +432,6 @@ void Game::initializeGame(const string& fileName)
     }
 
     infectedAtNode.assign(numberOfNodes, 0);
-
-    remapNodes();
 }
 
 void Game::buildInfectedAtNode()

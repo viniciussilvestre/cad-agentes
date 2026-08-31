@@ -60,10 +60,15 @@ class Game
         // indice deste jogo dentro deles.
         vector<Game>* world = nullptr;
         int gameIndex = 0;
-        vector<vector<int>> nodes;
-        vector<vector<int>> edges;
-        vector<vector<int>> graphCoords;
-        vector<Edge> graphEdges;
+        // O que sobra do grafo depois da leitura e so isto: a vizinhanca de
+        // grau fixo e a regiao de cada no.
+        //
+        // As coordenadas dos nos NAO ficam. Elas servem para classificar a
+        // direcao de cada aresta enquanto o arquivo e lido, e morrem ali. Antes
+        // viviam num vector<vector<int>> membro - 56 bytes por no para guardar
+        // dois inteiros - junto com `edges`, `graphCoords` e `graphEdges`, que
+        // eram preenchidos e nunca lidos por ninguem. Com um mapa de 5500x5500
+        // isso era mais de 7 GB por jogo de estrutura morta.
         vector<int> neighbors;
         vector<int> nodeRegion;
         vector<vector<int>> regionNodes;
@@ -81,7 +86,6 @@ class Game
         [[nodiscard]] int generateLocation(int id) const;
         [[nodiscard]] int generateInfectedLocation(int id) const;
         [[nodiscard]] AgentRng agentEngine(int id, int turn) const;
-        [[nodiscard]] pair<int, int> mapNodes(int x, int y, int x_min, int x_max, int y_min, int y_max) const;
         // Contagens dos agentes PRESENTES neste jogo. Com viagem ligada elas
         // mudam de turno para turno mesmo sem ninguem adoecer; quem conserva o
         // total e a Simulation, que soma o pool inteiro.
@@ -89,7 +93,6 @@ class Game
         [[nodiscard]] vector<int> countStatesByRegion() const;
         static uint64_t hashSeed(unsigned int seed, int id, int turn);
         void initializeGame(const string& fileName = "A1100a.txt");
-        void remapNodes();
         int claimSlot(int node, int preferredSlot);
         void startAllDumbThreads();
         void buildInfectedAtNode();

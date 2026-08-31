@@ -79,6 +79,21 @@ void Simulation::initialize()
     int numberOfGames = (int) games.size();
     int firstAgent = 0;
 
+    // As faixas de id sao calculadas em serie porque cada uma depende da
+    // anterior. Ler o arquivo, nao: e a parte cara, e um jogo nao toca no
+    // mapa de outro.
+    vector<int> firstAgentOf((size_t) numberOfGames, 0);
+    for (int index = 0; index < numberOfGames; index++)
+    {
+        int healthy = totalHealthy / numberOfGames + (index < totalHealthy % numberOfGames ? 1 : 0);
+        int infected = totalInfected / numberOfGames + (index < totalInfected % numberOfGames ? 1 : 0);
+        firstAgentOf[(size_t) index] = firstAgent;
+        firstAgent += healthy + infected;
+    }
+
+    // Um mapa por jogo, lidos em paralelo. Com 21 mapas de 1,5 GB, em serie
+    // isso e um core sozinho por varios minutos enquanto os outros 20 esperam.
+    #pragma omp parallel for schedule(dynamic)
     for (int index = 0; index < numberOfGames; index++)
     {
         // Divisao igual, com a sobra distribuida um agente por jogo entre os
@@ -92,14 +107,13 @@ void Simulation::initialize()
         // - entao a leitura do pool sai sequencial. Disjuntas porque o id e a
         // identidade do agente no pool: dois jogos com a mesma faixa seriam dois
         // jogos escrevendo no mesmo agente.
-        games[index].configure(pool, firstAgent, healthy, infected);
+        games[index].configure(pool, firstAgentOf[(size_t) index], healthy, infected);
         // A viagem precisa alcancar os outros ambientes. O ponteiro e para o
         // vetor, e nao para um elemento dele: games ja tem o tamanho final
         // desde o construtor, entao nada realoca depois disto.
         games[index].world = &games;
         games[index].gameIndex = index;
         games[index].initializeGame(mapFiles[index]);
-        firstAgent += healthy + infected;
     }
 }
 

@@ -11,47 +11,24 @@
 // Sem validacao de proposito: quem edita estas listas e quem compila.
 // ---------------------------------------------------------------------------
 static const vector<string> gameMaps = {
-    "map_0", "map_1", "map_2", "map_3", "map_4", "map_5", "map_6", 
-    "map_7", "map_8", "map_9", "map_10", "map_11", "map_12", "map_13", 
-    "map_14", "map_15", "map_16", "map_17", "map_18", "map_19", "map_20", 
-    "map_21", "map_22", "map_23", "map_24", "map_25", "map_26", "map_27", 
-    "map_28", "map_29", "map_30", "map_31", "map_32", "map_33", "map_34", 
-    "map_35", "map_36", "map_37", "map_38", "map_39", "map_40", "map_41", 
-    "map_42", "map_43", "map_44", "map_45", "map_46", "map_47", "map_48", 
-    "map_49", "map_50", "map_51", "map_52", "map_53", "map_54", "map_55", 
-    "map_56", "map_57", "map_58", "map_59", "map_60", "map_61", "map_62", 
-    "map_63", "map_64", "map_65", "map_66", "map_67", "map_68", "map_69", 
-    "map_70", "map_71", "map_72", "map_73", "map_74", "map_75", "map_76", 
-    "map_77", "map_78", "map_79", "map_80", "map_81", "map_82", "map_83", 
-    "map_84", "map_85", "map_86", "map_87", "map_88", "map_89", "map_90", 
-    "map_91", "map_92", "map_93", "map_94", "map_95", "map_96", "map_97", 
-    "map_98", "map_99", "map_100", "map_101", "map_102", "map_103", "map_104", 
-    "map_105", "map_106", "map_107", "map_108", "map_109", "map_110", "map_111", 
-    "map_112", "map_113", "map_114", "map_115", "map_116", "map_117", "map_118", 
-    "map_119", "map_120", "map_121", "map_122", "map_123", "map_124", "map_125", 
-    "map_126", "map_127", "map_128"
+    "map_0.txt", "map_1.txt", "map_2.txt", "map_3.txt", "map_4.txt", "map_5.txt", "map_6.txt", 
+    "map_7.txt", "map_8.txt", "map_9.txt", "map_10.txt", "map_11.txt", "map_12.txt", "map_13.txt", 
+    "map_14.txt", "map_15.txt", "map_16.txt", "map_17.txt", "map_18.txt", "map_19.txt", "map_20.txt"
 };
 
 static const vector<unsigned int> gameSeeds = {
     4, 87, 12, 93, 41, 65, 18, 30, 99, 52, 7, 76, 23, 88, 34, 
-    11, 62, 45, 90, 19, 81, 3, 58, 27, 95, 14, 70, 39, 83, 6, 
-    50, 72, 31, 96, 17, 64, 2, 85, 43, 78, 22, 59, 10, 91, 36, 
-    68, 5, 48, 80, 15, 73, 29, 94, 53, 21, 66, 8, 89, 38, 75, 
-    13, 60, 42, 97, 25, 84, 1, 49, 71, 33, 92, 56, 16, 79, 28, 
-    63, 9, 86, 37, 74, 20, 54, 82, 47, 98, 24, 69, 32, 57, 100, 
-    44, 77, 26, 61, 35, 85, 51, 67, 93, 19, 40, 73, 12, 88, 55, 
-    30, 96, 22, 64, 46, 81, 15, 70, 27, 90, 58, 3, 72, 39, 84, 
-    17, 63, 49, 95, 31, 68, 8, 53
+    11, 62, 45, 90, 19, 81
 };
 
 int main(int argc, char** argv)
 {
     // --agents e --infected sao TOTAIS, divididos igualmente entre os jogos:
     // com --games 4 --agents 1000, sao 250 saudaveis por jogo.
-    int initialNumberHealthy = 90000000;
-    int initialNumberInfected = 10000000;
+    int initialNumberHealthy = 1340476;
+    int initialNumberInfected = 100000;
     int numberOfTurns = 1000;
-    int numberOfGames = 128;
+    int numberOfGames = 1;
     unsigned int seed = Constants::DEFAULT_SEED;
     string mapFile = "map.txt";
     SeedMode seedMode = SeedMode::Uniform;
