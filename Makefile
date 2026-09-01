@@ -116,6 +116,15 @@ endif
 # tools/cuda_compat entra na frente do <math.h> do sistema: a glibc 2.41+
 # declara cospi/sinpi/rsqrt com noexcept e o cabecalho do CUDA declara sem, o
 # que impede compilar qualquer .cu. Ver o comentario la dentro.
+CUDA_GAME_SRCS = cuda/main.cu cuda/simulation.cu cuda/game.cu
+CUDA_GAME_HDRS = cuda/simulation.h cuda/game.h cuda/enums.h cuda/constants.h cuda/rng.h
+
+# O laco de agentes de TODOS os jogos cabe num kernel so: cada agente carrega o
+# indice do jogo, entao nao ha lista de presentes para manter. Ver simulation.h.
+GameC_cuda: $(CUDA_GAME_SRCS) $(CUDA_GAME_HDRS) tools/cuda_compat/math.h
+	$(NVCC) -std=c++17 -O2 -arch=$(CUDA_ARCH) $(NVCCBIN) -Itools/cuda_compat -Icuda \
+	        -o $@ $(CUDA_GAME_SRCS) -Xcompiler "-Wall -Wextra"
+
 genGraph_cuda: tools/genGraph.cu tools/cuda_compat/math.h
 	$(NVCC) -std=c++17 -O2 -arch=$(CUDA_ARCH) $(NVCCBIN) -Itools/cuda_compat \
 	        -o $@ tools/genGraph.cu -Xcompiler "-Wall -Wextra"
