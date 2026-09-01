@@ -1,0 +1,4 @@
+viniciussilvestre@workstation:~/cad/cad-agentes$ taskset -c 24 ./GameC
+jogo,turno,S,E,I,R,D
+0,800,19308192,160,45,7978428,2963175
+tempo: 6845.591 s

@@ -26,6 +26,11 @@ using namespace std;
 // Os mapas dos jogos vao concatenados num vetor so, com deslocamento e
 // contagem por jogo. Assim o kernel acha a vizinhanca de qualquer agente com
 // duas leituras, sem indireccao por ponteiro - que na GPU custaria caro.
+//
+// ORDEM DE CHAMADA. setSeeds, setSeedMode e setMaps precisam vir ANTES de
+// initialize(), porque initialize ja sobe os mapas e a configuracao junto com
+// eles, e libera o grafo do host em seguida. Chamar depois e erro fatal, nao
+// silencioso.
 class Simulation
 {
     public:
@@ -44,11 +49,13 @@ class Simulation
         void setSeedMode(SeedMode mode, int regionOrNode = 0);
         void setMaps(const vector<string>& mapFiles);
 
-        // Le os mapas no host.
+        // Le os mapas E os sobe para o device, em pipeline: cada jogo que
+        // termina de ser parseado sobe na hora, na sua propria stream, enquanto
+        // os outros ainda estao sendo lidos.
         void initialize();
         void initialize(const string& fileName);
 
-        // Sobe os mapas para o device e semeia os agentes la.
+        // Semeia os agentes no device.
         void start();
 
         // Um turno de todos os agentes de todos os jogos.
@@ -60,9 +67,12 @@ class Simulation
         [[nodiscard]] vector<vector<int>> countStatesPerGame();
 
     private:
-        void uploadMaps();
+        void prescanMaps();
+        void loadAndUploadMaps();
+        void uploadMetadata();
         void releaseDevice();
         void checkConservation(const vector<vector<int>>& counts) const;
+        void refuseAfterInitialize(const char* what) const;
 
         int totalHealthy;
         int totalInfected;
@@ -70,7 +80,12 @@ class Simulation
         vector<string> mapFiles;
         vector<unsigned int> seeds;
         vector<int> firstAgentOf;
-        vector<int> agentsOf;
+        vector<int> nodeOffset;
+        vector<int> nodeCount;
+
+        // Nos candidatos da semeadura por regiao, extraidos por jogo durante a
+        // carga: regionNodes morre junto com o resto do mapa do host.
+        vector<vector<int>> candidatesOf;
 
         // Estado dos agentes, no device.
         int* devicePositions = nullptr;
@@ -81,10 +96,13 @@ class Simulation
 
         // Mapas concatenados.
         int* deviceNeighbors = nullptr;
-        int* deviceNodeRegion = nullptr;
-        unsigned char* deviceInfectedAtNode = nullptr;
         int* deviceNodeOffset = nullptr;
         int* deviceNodeCount = nullptr;
+
+        // Um BIT por no, e nao um byte: o consumidor e uma leitura aleatoria
+        // por agente por turno, entao o que decide o custo e quanto do vetor
+        // cabe na L2. Dividir por oito e a diferenca entre caber e nao caber.
+        unsigned int* deviceInfectedMask = nullptr;
 
         // Semeadura.
         unsigned int* deviceSeeds = nullptr;
@@ -98,7 +116,9 @@ class Simulation
 
         int* deviceCounts = nullptr;
         long long totalNodes = 0;
+        long long infectedMaskWords = 0;
         bool ready = false;
+        bool initialized = false;
 };
 
 #endif //SIMULATION_H

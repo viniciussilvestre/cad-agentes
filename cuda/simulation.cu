@@ -4,9 +4,14 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstdio>
+#include <cstring>
 #include <iomanip>
 #include <iostream>
 #include <cuda_runtime.h>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
@@ -27,6 +32,19 @@ namespace
     // tempo criando e destruindo bloco do que rodando agente.
     constexpr int MAX_BLOCKS = 65535;
 
+    // Pedaco da subida por DMA.
+    //
+    // Copiar direto de um vector<int> e copia de memoria PAGINAVEL: o driver
+    // ainda assim passa por um buffer proprio dele, so que escondido e sincrono,
+    // e a taxa cai para algo perto de 5 GB/s. Fixar os 13 GB dos mapas tambem
+    // nao serve - cudaHostAlloc registra a ~1 GB/s, gastaria mais tempo do que
+    // economiza. Um par de buffers pequenos reciclados resolve os dois: o DMA
+    // sai de memoria fixada e a memoria fixada e barata de criar.
+    //
+    // 8 MB ja satura o barramento; o que importa e haver DOIS por thread, para
+    // o memcpy do pedaco n+1 rodar enquanto o pedaco n ainda esta no PCIe.
+    constexpr size_t STAGE_CHUNK = (size_t) 8 << 20;
+
     int blocksFor(long long items)
     {
         long long blocks = (items + BLOCK_SIZE - 1) / BLOCK_SIZE;
@@ -46,6 +64,30 @@ __device__ inline uint64_t seedFor(unsigned int gameSeed, int id, int turn)
     hash = splitMix64(hash ^ (uint64_t) (uint32_t) id);
     hash = splitMix64(hash ^ (uint64_t) (uint32_t) turn);
     return hash;
+}
+
+// Auto-laco nos slots vazios, no device.
+//
+// O host sobe o mapa ainda com os -1 que claimSlot usa como sentinela de slot
+// livre, e a correcao acontece aqui. A passada e uma leitura e uma escrita
+// sobre SLOTS * nodes inteiros - centenas de MB por jogo - e depois da subida
+// ninguem mais le esse vetor no host, entao nao ha motivo para a CPU gastar
+// uma segunda passada nele.
+//
+// gridDim.y = SLOTS, para o indice do no sair direto de blockIdx.x sem divisao.
+__global__ void fillSelfLoopsKernel(int* neighbors, long long base, int nodes)
+{
+    long long slot = (long long) blockIdx.y;
+    long long stride = (long long) blockDim.x * gridDim.x;
+    for (long long node = (long long) blockIdx.x * blockDim.x + threadIdx.x;
+         node < nodes; node += stride)
+    {
+        long long at = base + slot * (long long) nodes + node;
+        if (neighbors[at] == -1)
+        {
+            neighbors[at] = (int) node;
+        }
+    }
 }
 
 // Semeadura. Turno -1 e o sorteio uniforme; turno -2 e o da semeadura por
@@ -112,15 +154,23 @@ __global__ void seedAgentsKernel(int* positions, unsigned char* states,
     }
 }
 
-// Marca os nos com pelo menos um infectado.
+// Marca os nos com pelo menos um infectado, um BIT por no.
 //
-// Grava 1, e nao incrementa: o unico consumidor testa "> 0". Todos os
-// escritores gravam o MESMO valor, entao nao ha leitura-modificacao-escrita e
-// nao ha necessidade de atomico. Com centenas de milhoes de agentes sobre
-// alguns milhoes de nos, um fetch_add seria o gargalo do turno.
+// A versao em bytes gravava 1 sem atomico, e o argumento era correto: todos os
+// escritores gravavam o MESMO valor, entao nao havia leitura-modificacao-escrita.
+// Com bits esse argumento morre - dois agentes acendendo bits DIFERENTES da
+// mesma palavra sao leitura-modificacao-escrita de verdade, e sem atomicOr um
+// dos dois se perde.
+//
+// A troca compensa porque o consumidor nao e este kernel. Quem le o vetor e o
+// laco de agentes, uma leitura aleatoria por agente vivo por turno, e leituras
+// superam escritas em varias vezes: densificar o lado da leitura em 8x paga o
+// atomico do lado da escrita com folga. O memset do turno tambem encolhe 8x.
+//
+// O resultado e identico ao da versao em bytes, bit a bit.
 __global__ void markInfectedKernel(const int* positions, const unsigned char* states,
                                    const unsigned char* gameOf, const int* nodeOffset,
-                                   unsigned char* infectedAtNode, int numberOfAgents)
+                                   unsigned int* infectedMask, int numberOfAgents)
 {
     long long stride = (long long) blockDim.x * gridDim.x;
     for (long long index = (long long) blockIdx.x * blockDim.x + threadIdx.x;
@@ -131,13 +181,14 @@ __global__ void markInfectedKernel(const int* positions, const unsigned char* st
         {
             continue;
         }
-        infectedAtNode[nodeOffset[gameOf[id]] + positions[id]] = 1;
+        long long node = (long long) nodeOffset[gameOf[id]] + positions[id];
+        atomicOr(&infectedMask[node >> 5], 1u << (unsigned int) (node & 31));
     }
 }
 
 // Um turno de todos os agentes de todos os jogos.
 //
-// Uma thread por agente, nenhuma sincronizacao. infectedAtNode e so leitura
+// Uma thread por agente, nenhuma sincronizacao. infectedMask e so leitura
 // durante o kernel (foi congelado pelo anterior), cada thread escreve
 // exclusivamente nos proprios slots, e o RNG e funcao pura de (semente do jogo,
 // id, turno). A viagem tambem: mudar de jogo e escrever gameOf[id] e
@@ -145,7 +196,7 @@ __global__ void markInfectedKernel(const int* positions, const unsigned char* st
 __global__ void stepKernel(int* positions, unsigned char* states,
                            unsigned char* counters, unsigned char* travelLock,
                            unsigned char* gameOf,
-                           const int* neighbors, const unsigned char* infectedAtNode,
+                           const int* neighbors, const unsigned int* infectedMask,
                            const int* nodeOffset, const int* nodeCount,
                            const unsigned int* seeds,
                            int numberOfGames, int numberOfAgents, int turn)
@@ -185,7 +236,9 @@ __global__ void stepKernel(int* positions, unsigned char* states,
         // isso sai daqui sem gastar o segundo sorteio.
         if (state == States::SUSCEPTIBLE || state == States::RECOVERED)
         {
-            if (infectedAtNode[offset + position] > 0)
+            long long node = (long long) offset + position;
+            unsigned int bit = (infectedMask[node >> 5] >> (unsigned int) (node & 31)) & 1u;
+            if (bit != 0u)
             {
                 states[id] = (unsigned char) States::EXPOSED;
                 counters[id] = 0;
@@ -291,7 +344,7 @@ __global__ void countKernel(const unsigned char* states, const unsigned char* ga
 
     long long stride = (long long) blockDim.x * gridDim.x;
     for (long long index = (long long) blockIdx.x * blockDim.x + threadIdx.x;
-         index < numberOfAgents; index += stride)
+        index < numberOfAgents; index += stride)
     {
         int id = (int) index;
         atomicAdd(&localCounts[gameOf[id] * 5 + (int) states[id]], 1);
@@ -303,6 +356,77 @@ __global__ void countKernel(const unsigned char* states, const unsigned char* ga
         if (localCounts[bin] != 0)
         {
             atomicAdd(&counts[bin], localCounts[bin]);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Subida em pipeline
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    // Buffers fixados (pinned) e stream por thread de carga.
+    struct Stager
+    {
+        cudaStream_t stream = nullptr;
+        unsigned char* buffer[2] = { nullptr, nullptr };
+        cudaEvent_t done[2] = { nullptr, nullptr };
+    };
+
+    void createStagers(vector<Stager>& stagers)
+    {
+        for (Stager& stager : stagers)
+        {
+            CUDA_CHECK(cudaStreamCreate(&stager.stream));
+            for (int slot = 0; slot < 2; slot++)
+            {
+                CUDA_CHECK(cudaHostAlloc(&stager.buffer[slot], STAGE_CHUNK, cudaHostAllocDefault));
+                CUDA_CHECK(cudaEventCreateWithFlags(&stager.done[slot], cudaEventDisableTiming));
+            }
+        }
+    }
+
+    void destroyStagers(vector<Stager>& stagers)
+    {
+        for (Stager& stager : stagers)
+        {
+            for (int slot = 0; slot < 2; slot++)
+            {
+                cudaFreeHost(stager.buffer[slot]);
+                cudaEventDestroy(stager.done[slot]);
+            }
+            cudaStreamDestroy(stager.stream);
+        }
+    }
+
+    // Copia bytes do host para o device passando pelos dois buffers fixados,
+    // alternando entre eles. O evento e o que autoriza a reutilizacao: enquanto
+    // o DMA do pedaco anterior nao terminou, aquele buffer ainda esta sendo
+    // lido pelo motor de copia.
+    //
+    // Quando esta funcao retorna, todos os bytes do host ja foram lidos para os
+    // buffers fixados - o vetor de origem pode ser liberado na hora, mesmo com
+    // DMA ainda em voo.
+    void stagedUpload(Stager& stager, void* device, const void* host, size_t bytes)
+    {
+        const unsigned char* source = (const unsigned char*) host;
+        unsigned char* target = (unsigned char*) device;
+        int slot = 0;
+
+        for (size_t done = 0; done < bytes; done += STAGE_CHUNK)
+        {
+            size_t piece = bytes - done;
+            if (piece > STAGE_CHUNK) { piece = STAGE_CHUNK; }
+
+            // Um evento nunca gravado conta como concluido, entao as duas
+            // primeiras voltas passam direto.
+            CUDA_CHECK(cudaEventSynchronize(stager.done[slot]));
+            memcpy(stager.buffer[slot], source + done, piece);
+            CUDA_CHECK(cudaMemcpyAsync(target + done, stager.buffer[slot], piece,
+                                       cudaMemcpyHostToDevice, stager.stream));
+            CUDA_CHECK(cudaEventRecord(stager.done[slot], stager.stream));
+            slot ^= 1;
         }
     }
 }
@@ -340,13 +464,34 @@ Simulation::~Simulation()
     releaseDevice();
 }
 
+// initialize ja sobe mapas e configuracao e libera o grafo do host logo depois,
+// entao mexer em qualquer um dos tres dali em diante nao teria efeito nenhum no
+// device. Falhar alto e melhor que rodar com uma configuracao que o usuario
+// acha que aplicou.
+void Simulation::refuseAfterInitialize(const char* what) const
+{
+    if (initialized)
+    {
+        cerr << "Erro: " << what << " precisa ser chamado antes de initialize()." << endl;
+        exit(EXIT_FAILURE);
+    }
+}
+
 void Simulation::setSeed(unsigned int seed)
 {
+    refuseAfterInitialize("setSeed");
     seeds.assign(games.size(), seed);
 }
 
 void Simulation::setSeeds(const vector<unsigned int>& newSeeds)
 {
+    refuseAfterInitialize("setSeeds");
+    if (newSeeds.size() < games.size())
+    {
+        cerr << "Erro: " << newSeeds.size() << " sementes para " << games.size()
+             << " jogos." << endl;
+        exit(EXIT_FAILURE);
+    }
     for (size_t index = 0; index < games.size(); index++)
     {
         seeds[index] = newSeeds[index];
@@ -355,6 +500,7 @@ void Simulation::setSeeds(const vector<unsigned int>& newSeeds)
 
 void Simulation::setSeedMode(SeedMode mode, int regionOrNode)
 {
+    refuseAfterInitialize("setSeedMode");
     for (Game& game : games)
     {
         game.setSeedMode(mode, regionOrNode);
@@ -363,6 +509,13 @@ void Simulation::setSeedMode(SeedMode mode, int regionOrNode)
 
 void Simulation::setMaps(const vector<string>& files)
 {
+    refuseAfterInitialize("setMaps");
+    if (files.size() < games.size())
+    {
+        cerr << "Erro: " << files.size() << " mapas para " << games.size()
+             << " jogos." << endl;
+        exit(EXIT_FAILURE);
+    }
     mapFiles = files;
 }
 
@@ -372,14 +525,103 @@ void Simulation::initialize(const string& fileName)
     initialize();
 }
 
-void Simulation::initialize()
+// Le so os cabecalhos, para saber onde cada mapa comeca no vetor concatenado
+// antes de parsear qualquer um deles. Um getline por arquivo.
+void Simulation::prescanMaps()
 {
     int numberOfGames = (int) games.size();
-    firstAgentOf.assign((size_t) numberOfGames, 0);
-    agentsOf.assign((size_t) numberOfGames, 0);
+    nodeOffset.assign((size_t) numberOfGames, 0);
+    nodeCount.assign((size_t) numberOfGames, 0);
+    totalNodes = 0;
+
+    for (int index = 0; index < numberOfGames; index++)
+    {
+        int nodes = Game::declaredNodesOf(mapFiles[(size_t) index]);
+        nodeOffset[(size_t) index] = (int) totalNodes;
+        nodeCount[(size_t) index] = nodes;
+        totalNodes += nodes;
+    }
+
+    // nodeOffset e int porque vai para o kernel como int. Estourar isso daria
+    // deslocamento negativo em silencio.
+    if (totalNodes > 2147483647LL)
+    {
+        cerr << "Erro: " << totalNodes << " nos no total, acima do teto de "
+             << "2^31-1 imposto por nodeOffset." << endl;
+        exit(EXIT_FAILURE);
+    }
+}
+
+// Parse e subida em pipeline. Cada thread parseia um mapa e o sobe na sua
+// propria stream assim que termina, enquanto as outras ainda estao lendo os
+// seus - o tempo de PCIe some atras do tempo de parse em vez de vir depois
+// dele.
+void Simulation::loadAndUploadMaps()
+{
+    int numberOfGames = (int) games.size();
+
+    int workers = numberOfGames;
+#ifdef _OPENMP
+    if (omp_get_max_threads() < workers) { workers = omp_get_max_threads(); }
+#else
+    workers = 1;
+#endif
+    if (workers < 1) { workers = 1; }
+
+    vector<Stager> stagers((size_t) workers);
+    createStagers(stagers);
+
+    candidatesOf.assign((size_t) numberOfGames, vector<int>());
+
+    #pragma omp parallel for schedule(dynamic) num_threads(workers)
+    for (int index = 0; index < numberOfGames; index++)
+    {
+        int worker = 0;
+#ifdef _OPENMP
+        worker = omp_get_thread_num();
+#endif
+        Game& game = games[(size_t) index];
+        game.initializeGame(mapFiles[(size_t) index]);
+        game.validateSeeding();
+
+        // Candidatos da semeadura por regiao, copiados AQUI porque regionNodes
+        // morre no fim desta iteracao.
+        if (game.seedModeOf() == SeedMode::SingleRegion)
+        {
+            candidatesOf[(size_t) index] = game.regionNodes[(size_t) game.seedTargetOf()];
+        }
+
+        size_t bytes = (size_t) game.numberOfNodes * Constants::SLOTS * sizeof(int);
+        stagedUpload(stagers[(size_t) worker],
+                     deviceNeighbors + (size_t) nodeOffset[(size_t) index] * Constants::SLOTS,
+                     game.neighbors.data(), bytes);
+
+        // Na mesma stream da copia, entao roda depois dela.
+        dim3 grid((unsigned int) blocksFor(game.numberOfNodes), (unsigned int) Constants::SLOTS);
+        fillSelfLoopsKernel<<<grid, BLOCK_SIZE, 0, stagers[(size_t) worker].stream>>>(
+            deviceNeighbors,
+            (long long) nodeOffset[(size_t) index] * Constants::SLOTS,
+            game.numberOfNodes);
+        CUDA_CHECK(cudaGetLastError());
+
+        // stagedUpload ja leu tudo para os buffers fixados: o grafo do host nao
+        // serve mais para nada, e sao centenas de MB por jogo.
+        game.releaseHostMap();
+    }
+
+    // Espera o DMA em voo antes de devolver os buffers fixados de onde ele le.
+    CUDA_CHECK(cudaDeviceSynchronize());
+    destroyStagers(stagers);
+}
+
+void Simulation::uploadMetadata()
+{
+    int numberOfGames = (int) games.size();
 
     // As faixas de id sao calculadas em serie porque cada uma depende da
     // anterior.
+    firstAgentOf.assign((size_t) numberOfGames, 0);
+    vector<int> healthyOf((size_t) numberOfGames, 0);
     int firstAgent = 0;
     for (int index = 0; index < numberOfGames; index++)
     {
@@ -388,58 +630,12 @@ void Simulation::initialize()
         int healthy = totalHealthy / numberOfGames + (index < totalHealthy % numberOfGames ? 1 : 0);
         int infected = totalInfected / numberOfGames + (index < totalInfected % numberOfGames ? 1 : 0);
         firstAgentOf[(size_t) index] = firstAgent;
-        agentsOf[(size_t) index] = healthy + infected;
+        healthyOf[(size_t) index] = healthy;
         firstAgent += healthy + infected;
     }
 
-    // Ler o arquivo, nao: um jogo nao toca no mapa de outro.
-    //
-    // Isto e CPU, e e o unico trecho pesado que sobrou nela. Com 24 mapas de
-    // 1,5 GB, em serie sao minutos de um core sozinho enquanto a GPU - que faz
-    // 20 turnos em 0,4 s - espera parada. E o mesmo motivo pelo qual a versao
-    // OpenMP paraleliza este laco.
-    #pragma omp parallel for schedule(dynamic)
-    for (int index = 0; index < numberOfGames; index++)
-    {
-        games[index].initializeGame(mapFiles[index]);
-        games[index].validateSeeding();
-    }
-}
-
-void Simulation::uploadMaps()
-{
-    int numberOfGames = (int) games.size();
-
-    // Mapas concatenados: um vetor de vizinhanca so, com deslocamento por jogo.
-    // Um vetor de ponteiros seria uma indireccao extra por acesso, e o acesso
-    // aqui ja e aleatorio.
-    vector<int> nodeOffset((size_t) numberOfGames, 0);
-    vector<int> nodeCount((size_t) numberOfGames, 0);
-    totalNodes = 0;
-    for (int index = 0; index < numberOfGames; index++)
-    {
-        nodeOffset[(size_t) index] = (int) totalNodes;
-        nodeCount[(size_t) index] = games[index].numberOfNodes;
-        totalNodes += games[index].numberOfNodes;
-    }
-
-    CUDA_CHECK(cudaMalloc(&deviceNeighbors, (size_t) totalNodes * Constants::SLOTS * sizeof(int)));
-    CUDA_CHECK(cudaMalloc(&deviceNodeRegion, (size_t) totalNodes * sizeof(int)));
-    CUDA_CHECK(cudaMalloc(&deviceInfectedAtNode, (size_t) totalNodes));
-
-    for (int index = 0; index < numberOfGames; index++)
-    {
-        const Game& game = games[index];
-        size_t slots = (size_t) game.numberOfNodes * Constants::SLOTS;
-        CUDA_CHECK(cudaMemcpy(deviceNeighbors + (size_t) nodeOffset[(size_t) index] * Constants::SLOTS,
-                              game.neighbors.data(), slots * sizeof(int), cudaMemcpyHostToDevice));
-        CUDA_CHECK(cudaMemcpy(deviceNodeRegion + nodeOffset[(size_t) index],
-                              game.nodeRegion.data(),
-                              (size_t) game.numberOfNodes * sizeof(int), cudaMemcpyHostToDevice));
-    }
-
-    // Candidatos da semeadura por regiao, concatenados do mesmo jeito. Ficam
-    // vazios para os jogos que nao usam SingleRegion.
+    // Candidatos concatenados. Ficam vazios para os jogos que nao usam
+    // SingleRegion.
     vector<int> candidates;
     vector<int> candidateOffset((size_t) numberOfGames, 0);
     vector<int> candidateCount((size_t) numberOfGames, 0);
@@ -448,20 +644,18 @@ void Simulation::uploadMaps()
 
     for (int index = 0; index < numberOfGames; index++)
     {
-        seedModeOf[(size_t) index] = (int) games[index].seedModeOf();
-        seedTargetOf[(size_t) index] = games[index].seedTargetOf();
+        seedModeOf[(size_t) index] = (int) games[(size_t) index].seedModeOf();
+        seedTargetOf[(size_t) index] = games[(size_t) index].seedTargetOf();
         candidateOffset[(size_t) index] = (int) candidates.size();
-        if (games[index].seedModeOf() == SeedMode::SingleRegion)
-        {
-            const vector<int>& list = games[index].regionNodes[games[index].seedTargetOf()];
-            candidates.insert(candidates.end(), list.begin(), list.end());
-            candidateCount[(size_t) index] = (int) list.size();
-        }
+        const vector<int>& list = candidatesOf[(size_t) index];
+        candidates.insert(candidates.end(), list.begin(), list.end());
+        candidateCount[(size_t) index] = (int) list.size();
     }
     if (candidates.empty())
     {
         candidates.push_back(0);
     }
+    vector<vector<int>>().swap(candidatesOf);
 
     auto upload = [](int** target, const vector<int>& source) {
         CUDA_CHECK(cudaMalloc(target, source.size() * sizeof(int)));
@@ -471,19 +665,12 @@ void Simulation::uploadMaps()
     upload(&deviceNodeOffset, nodeOffset);
     upload(&deviceNodeCount, nodeCount);
     upload(&deviceFirstAgent, firstAgentOf);
+    upload(&deviceHealthyOf, healthyOf);
     upload(&deviceSeedMode, seedModeOf);
     upload(&deviceSeedTarget, seedTargetOf);
     upload(&deviceCandidates, candidates);
     upload(&deviceCandidateOffset, candidateOffset);
     upload(&deviceCandidateCount, candidateCount);
-
-    vector<int> healthyOf((size_t) numberOfGames, 0);
-    for (int index = 0; index < numberOfGames; index++)
-    {
-        healthyOf[(size_t) index] = totalHealthy / numberOfGames +
-                                    (index < totalHealthy % numberOfGames ? 1 : 0);
-    }
-    upload(&deviceHealthyOf, healthyOf);
 
     CUDA_CHECK(cudaMalloc(&deviceSeeds, seeds.size() * sizeof(unsigned int)));
     CUDA_CHECK(cudaMemcpy(deviceSeeds, seeds.data(), seeds.size() * sizeof(unsigned int),
@@ -492,9 +679,30 @@ void Simulation::uploadMaps()
     CUDA_CHECK(cudaMalloc(&deviceCounts, (size_t) numberOfGames * 5 * sizeof(int)));
 }
 
+void Simulation::initialize()
+{
+    prescanMaps();
+
+    // Alocar antes do parse e o que permite a subida em pipeline: com os
+    // deslocamentos ja fixados, cada mapa sabe onde escrever no momento em que
+    // fica pronto.
+    infectedMaskWords = (totalNodes + 31) / 32;
+    CUDA_CHECK(cudaMalloc(&deviceNeighbors, (size_t) totalNodes * Constants::SLOTS * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&deviceInfectedMask, (size_t) infectedMaskWords * sizeof(unsigned int)));
+    ready = true;
+
+    loadAndUploadMaps();
+    uploadMetadata();
+    initialized = true;
+}
+
 void Simulation::start()
 {
-    uploadMaps();
+    if (!initialized)
+    {
+        cerr << "Erro: start() antes de initialize()." << endl;
+        exit(EXIT_FAILURE);
+    }
 
     size_t agents = (size_t) numberOfAgents;
     CUDA_CHECK(cudaMalloc(&devicePositions, agents * sizeof(int)));
@@ -502,7 +710,6 @@ void Simulation::start()
     CUDA_CHECK(cudaMalloc(&deviceCounters, agents));
     CUDA_CHECK(cudaMalloc(&deviceTravelLock, agents));
     CUDA_CHECK(cudaMalloc(&deviceGameOf, agents));
-    ready = true;
 
     int blocks = blocksFor(numberOfAgents);
     seedAgentsKernel<<<blocks, BLOCK_SIZE>>>(
@@ -519,18 +726,19 @@ void Simulation::step()
 {
     int blocks = blocksFor(numberOfAgents);
 
-    CUDA_CHECK(cudaMemsetAsync(deviceInfectedAtNode, 0, (size_t) totalNodes));
+    CUDA_CHECK(cudaMemsetAsync(deviceInfectedMask, 0,
+                               (size_t) infectedMaskWords * sizeof(unsigned int)));
 
     markInfectedKernel<<<blocks, BLOCK_SIZE>>>(
         devicePositions, deviceStates, deviceGameOf, deviceNodeOffset,
-        deviceInfectedAtNode, numberOfAgents);
+        deviceInfectedMask, numberOfAgents);
     CUDA_CHECK(cudaGetLastError());
 
     // Mesma stream, entao o passo so comeca quando a marcacao terminou:
-    // infectedAtNode ja esta congelado quando o laco de agentes o le.
+    // infectedMask ja esta congelado quando o laco de agentes o le.
     stepKernel<<<blocks, BLOCK_SIZE>>>(
         devicePositions, deviceStates, deviceCounters, deviceTravelLock, deviceGameOf,
-        deviceNeighbors, deviceInfectedAtNode, deviceNodeOffset, deviceNodeCount,
+        deviceNeighbors, deviceInfectedMask, deviceNodeOffset, deviceNodeCount,
         deviceSeeds, (int) games.size(), numberOfAgents, turns);
     CUDA_CHECK(cudaGetLastError());
 
@@ -624,8 +832,7 @@ void Simulation::releaseDevice()
     cudaFree(deviceTravelLock);
     cudaFree(deviceGameOf);
     cudaFree(deviceNeighbors);
-    cudaFree(deviceNodeRegion);
-    cudaFree(deviceInfectedAtNode);
+    cudaFree(deviceInfectedMask);
     cudaFree(deviceNodeOffset);
     cudaFree(deviceNodeCount);
     cudaFree(deviceSeeds);

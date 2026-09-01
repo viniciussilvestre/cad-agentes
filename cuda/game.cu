@@ -45,6 +45,15 @@ void Game::validateSeeding() const
     }
 }
 
+void Game::releaseHostMap()
+{
+    // swap com temporario vazio, e nao clear(): clear zera o tamanho e mantem a
+    // capacidade, que aqui e justamente o que se quer devolver.
+    vector<int>().swap(neighbors);
+    vector<int>().swap(nodeRegion);
+    vector<vector<int>>().swap(regionNodes);
+}
+
 // Escolhe o slot cardinal de uma aresta a partir do deslocamento entre as
 // coordenadas dos dois nos. A regra e simetrica: se v esta a direita de u,
 // entao u esta a esquerda de v, logo os dois lados concordam sobre o eixo e
@@ -111,6 +120,33 @@ static bool readInt(const char*& cursor, int& value)
     }
     value = (int) (negative ? -parsed : parsed);
     return true;
+}
+
+int Game::declaredNodesOf(const string& fileName)
+{
+    ifstream file(fileName);
+    if (!file.is_open())
+    {
+        cerr << "Erro: nao foi possivel abrir o arquivo do grafo '" << fileName << "'." << endl;
+        exit(EXIT_FAILURE);
+    }
+
+    string line;
+    if (!getline(file, line))
+    {
+        cerr << "Erro: o arquivo do grafo '" << fileName << "' esta vazio." << endl;
+        exit(EXIT_FAILURE);
+    }
+
+    int declaredNodes = 0;
+    const char* cursor = line.c_str();
+    if (!readInt(cursor, declaredNodes) || declaredNodes < 1)
+    {
+        cerr << "Erro: cabecalho invalido em '" << fileName
+             << "': esperado 'numero_de_nos numero_de_arestas numero_de_regioes'." << endl;
+        exit(EXIT_FAILURE);
+    }
+    return declaredNodes;
 }
 
 void Game::initializeGame(const string& fileName)
@@ -288,16 +324,22 @@ void Game::initializeGame(const string& fileName)
     //    threads de um warp fazem a mesma sequencia de instrucoes, sorteiam
     //    slots diferentes e nada diverge. Um laco de rejeicao sobre grau
     //    variavel serializaria o warp pelo pior caso.
+    //
+    // O PREENCHIMENTO ACONTECE NO DEVICE (ver fillSelfLoopsKernel). O vetor
+    // sobe com os -1 e e corrigido la, porque a passada e uma leitura e uma
+    // escrita sobre os SLOTS * numberOfNodes inteiros do mapa - centenas de MB
+    // que a CPU nao tem motivo para tocar de novo: depois da subida ninguem
+    // mais le este vetor no host.
     // ------------------------------------------------------------------
-    for (int slot = 0; slot < Constants::SLOTS; slot++)
+
+    // O cabecalho e usado por declaredNodesOf para dimensionar o vetor
+    // concatenado ANTES do parse. Se ele mentir, o deslocamento de todos os
+    // jogos seguintes sai errado em silencio - dai a checagem ser fatal.
+    if (numberOfNodes != declaredNodes)
     {
-        for (int node = 0; node < numberOfNodes; node++)
-        {
-            if (neighbors[slot * numberOfNodes + node] == -1)
-            {
-                neighbors[slot * numberOfNodes + node] = node;
-            }
-        }
+        cerr << "Erro: '" << fileName << "' declara " << declaredNodes
+             << " nos no cabecalho mas lista " << numberOfNodes << "." << endl;
+        exit(EXIT_FAILURE);
     }
 
     regionNodes.assign(numberOfRegions, vector<int>());

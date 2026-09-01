@@ -49,10 +49,10 @@ int main(int argc, char** argv)
 {
     // --agents e --infected sao TOTAIS, divididos igualmente entre os jogos:
     // com --games 4 --agents 1000, sao 250 saudaveis por jogo.
-    int initialNumberHealthy = 497250000;
-    int initialNumberInfected = 17000000;
-    int numberOfTurns = 800;
-    int numberOfGames = 24;
+    int initialNumberHealthy = 1201884940;
+    int initialNumberInfected = 20000000;
+    int numberOfTurns = 600;
+    int numberOfGames = 20;
     // Zero significa "deixa o OpenMP decidir", que e o padrao dele: o numero de
     // nucleos logicos, ou o que estiver em OMP_NUM_THREADS.
     int numberOfThreads = 0;
