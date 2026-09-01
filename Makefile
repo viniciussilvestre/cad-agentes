@@ -121,9 +121,13 @@ CUDA_GAME_HDRS = cuda/simulation.h cuda/game.h cuda/enums.h cuda/constants.h cud
 
 # O laco de agentes de TODOS os jogos cabe num kernel so: cada agente carrega o
 # indice do jogo, entao nao ha lista de presentes para manter. Ver simulation.h.
+#
+# O -fopenmp nao e para o laco de agentes, que e da GPU: e para ler os mapas em
+# paralelo. Com 24 arquivos de 1,5 GB, em serie a leitura leva minutos de um
+# core so enquanto a GPU espera parada.
 GameC_cuda: $(CUDA_GAME_SRCS) $(CUDA_GAME_HDRS) tools/cuda_compat/math.h
 	$(NVCC) -std=c++17 -O2 -arch=$(CUDA_ARCH) $(NVCCBIN) -Itools/cuda_compat -Icuda \
-	        -o $@ $(CUDA_GAME_SRCS) -Xcompiler "-Wall -Wextra"
+	        -o $@ $(CUDA_GAME_SRCS) -Xcompiler "-Wall -Wextra -fopenmp" -lgomp
 
 genGraph_cuda: tools/genGraph.cu tools/cuda_compat/math.h
 	$(NVCC) -std=c++17 -O2 -arch=$(CUDA_ARCH) $(NVCCBIN) -Itools/cuda_compat \

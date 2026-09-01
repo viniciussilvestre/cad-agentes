@@ -378,6 +378,8 @@ void Simulation::initialize()
     firstAgentOf.assign((size_t) numberOfGames, 0);
     agentsOf.assign((size_t) numberOfGames, 0);
 
+    // As faixas de id sao calculadas em serie porque cada uma depende da
+    // anterior.
     int firstAgent = 0;
     for (int index = 0; index < numberOfGames; index++)
     {
@@ -388,7 +390,17 @@ void Simulation::initialize()
         firstAgentOf[(size_t) index] = firstAgent;
         agentsOf[(size_t) index] = healthy + infected;
         firstAgent += healthy + infected;
+    }
 
+    // Ler o arquivo, nao: um jogo nao toca no mapa de outro.
+    //
+    // Isto e CPU, e e o unico trecho pesado que sobrou nela. Com 24 mapas de
+    // 1,5 GB, em serie sao minutos de um core sozinho enquanto a GPU - que faz
+    // 20 turnos em 0,4 s - espera parada. E o mesmo motivo pelo qual a versao
+    // OpenMP paraleliza este laco.
+    #pragma omp parallel for schedule(dynamic)
+    for (int index = 0; index < numberOfGames; index++)
+    {
         games[index].initializeGame(mapFiles[index]);
         games[index].validateSeeding();
     }
