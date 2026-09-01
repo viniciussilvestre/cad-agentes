@@ -26,7 +26,7 @@ NVCC      ?= $(shell command -v nvcc 2>/dev/null || echo /usr/local/cuda/bin/nvc
 CUDA_ARCH ?= sm_61
 HAVE_NVCC := $(shell test -x "$(NVCC)" && echo 1)
 ifeq ($(HAVE_NVCC),1)
-  CUDA_TARGET = genGraph_cuda
+  CUDA_TARGET = GameC_cuda genGraph_cuda
 else
   CUDA_TARGET =
 endif
@@ -153,7 +153,7 @@ ifdef HAVE_METAL
 endif
 
 clean:
-	rm -f GameC GameC_omp GameC_metal kernels.metallib runTests runTests_omp \
-	      $(GENERATOR) genGraph_mpi genGraph_cuda base/*.o openmp/*.o metal/*.air
+	rm -f GameC GameC_omp GameC_metal GameC_cuda kernels.metallib runTests runTests_omp \
+	      $(GENERATOR) genGraph_mpi genGraph_cuda base/*.o openmp/*.o metal/*.air cuda/*.o
 
 .PHONY: all run test golden clean
