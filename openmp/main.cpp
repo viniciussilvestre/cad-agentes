@@ -49,8 +49,8 @@ int main(int argc, char** argv)
 {
     // --agents e --infected sao TOTAIS, divididos igualmente entre os jogos:
     // com --games 4 --agents 1000, sao 250 saudaveis por jogo.
-    int initialNumberHealthy = 60094247;
-    int initialNumberInfected = 1000000;
+    int initialNumberHealthy = 1201884940;
+    int initialNumberInfected = 20000000;
     int numberOfTurns = 600;
     int numberOfGames = 20;
     // Paralelismo nos dois lacos (jogos e agentes) ou so no de jogos. Escolha
