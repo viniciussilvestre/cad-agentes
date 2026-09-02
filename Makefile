@@ -41,8 +41,8 @@ else
   MPI_TARGET =
 endif
 
-MTL_SRCS  = metal/main.cpp metal/game.cpp
-MTL_HDRS  = metal/game.h metal/enums.h metal/constants.h metal/rng.h metal/gpu.h
+MTL_SRCS  = metal/main.cpp metal/simulation.cpp metal/game.cpp
+MTL_HDRS  = metal/simulation.h metal/game.h metal/enums.h metal/constants.h metal/rng.h metal/gpu.h
 MTL_FRAME = -framework Metal -framework Foundation
 
 # Metal so existe no macOS: fora dele o alvo sai do `all`/`golden` em vez de
@@ -78,8 +78,13 @@ kernels.metallib: metal/kernels.metal $(MTL_HDRS)
 	rm -f metal/kernels.air
 
 # gpu.mm e Objective-C++ (unico arquivo que enxerga o Metal); o resto e C++ puro.
+#
+# O -fopenmp nao e para o laco de agentes, que e da GPU: e para ler os mapas em
+# paralelo, como na versao CUDA. Com dezenas de arquivos grandes, em serie a
+# leitura leva minutos de um core so enquanto a GPU espera parada.
 GameC_metal: $(MTL_SRCS) metal/gpu.mm $(MTL_HDRS)
-	$(CXX) $(CXXFLAGS) -Imetal -o $@ $(MTL_SRCS) metal/gpu.mm -fobjc-arc $(MTL_FRAME)
+	$(CXX) $(CXXFLAGS) $(OMPFLAGS) -Imetal -o $@ $(MTL_SRCS) metal/gpu.mm \
+	       -fobjc-arc $(MTL_FRAME) $(OMPLIBS)
 
 else
 

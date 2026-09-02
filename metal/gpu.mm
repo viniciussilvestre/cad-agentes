@@ -4,41 +4,88 @@
 #include "gpu.h"
 #include "constants.h"
 #include <iostream>
+#include <mutex>
 
-// Espelho exato do StepParams declarado em kernels.metal. Os campos precisam
-// bater em ordem e tamanho; todos sao de 4 bytes, entao nao ha buraco de
-// alinhamento a discutir.
+// Espelhos exatos dos structs declarados em kernels.metal. Ordem e largura
+// precisam bater campo a campo.
 //
 // As duracoes e limiares viajam por aqui em vez de serem reescritos no MSL:
 // constants.h e a fonte unica, e o kernel usa literalmente o que o host
 // calculou.
+struct FillParams
+{
+    uint64_t base;
+    uint32_t nodes;
+    uint32_t padding;
+};
+
+struct SeedParams
+{
+    uint32_t numberOfAgents;
+    uint32_t numberOfGames;
+};
+
 struct StepParams
 {
     uint32_t numberOfAgents;
-    uint32_t numberOfNodes;
-    uint32_t baseSeed;
+    uint32_t numberOfGames;
     int32_t  turn;
     uint32_t slots;
     int32_t  exposedTime;
     int32_t  deathTime;
     uint32_t infectionThreshold;
     uint32_t mortalityThreshold;
+    uint32_t travelThreshold;
+    uint32_t travelLockTurns;
 };
 
 struct GpuRunner::Impl
 {
     id<MTLDevice> device = nil;
     id<MTLCommandQueue> queue = nil;
+
+    id<MTLComputePipelineState> fillPipeline = nil;
+    id<MTLComputePipelineState> seedPipeline = nil;
     id<MTLComputePipelineState> markPipeline = nil;
     id<MTLComputePipelineState> stepPipeline = nil;
 
-    id<MTLBuffer> positionBuffer = nil;
-    id<MTLBuffer> stateBuffer = nil;
-    id<MTLBuffer> counterBuffer = nil;
-    id<MTLBuffer> neighborsBuffer = nil;
-    id<MTLBuffer> infectedBuffer = nil;
+    // Estado dos agentes, indexado por id global.
+    id<MTLBuffer> positions = nil;
+    id<MTLBuffer> states = nil;
+    id<MTLBuffer> counters = nil;
+    id<MTLBuffer> travelLock = nil;
+    id<MTLBuffer> gameOf = nil;
 
-    StepParams params = {};
+    // Mapas concatenados e a mascara de infectados.
+    id<MTLBuffer> neighbors = nil;
+    id<MTLBuffer> infectedMask = nil;
+
+    // Metadados por jogo.
+    id<MTLBuffer> nodeOffset = nil;
+    id<MTLBuffer> nodeCount = nil;
+    id<MTLBuffer> firstAgent = nil;
+    id<MTLBuffer> healthyOf = nil;
+    id<MTLBuffer> seeds = nil;
+    id<MTLBuffer> seedMode = nil;
+    id<MTLBuffer> seedTarget = nil;
+    id<MTLBuffer> candidates = nil;
+    id<MTLBuffer> candidateOffset = nil;
+    id<MTLBuffer> candidateCount = nil;
+
+    // Ultimo command buffer enfileirado. finish() espera por ele; como a fila e
+    // ordenada, esperar o ultimo espera todos.
+    //
+    // O mutex existe por causa da carga dos mapas: ela roda em paralelo e cada
+    // thread enfileira o proprio fillSelfLoops. A MTLCommandQueue ja e segura
+    // para criar command buffers de varias threads; quem nao e segura e esta
+    // variavel. O laco de turnos e serial e nao disputa nada.
+    id<MTLCommandBuffer> lastCommand = nil;
+    mutex commandMutex;
+
+    int numberOfAgents = 0;
+    int numberOfGames = 0;
+    uint64_t maskWords = 0;
+    StepParams step = {};
 };
 
 GpuRunner::GpuRunner()
@@ -51,14 +98,31 @@ GpuRunner::~GpuRunner()
     delete impl;
 }
 
+static id<MTLComputePipelineState> makePipeline(id<MTLDevice> device,
+                                                id<MTLLibrary> library,
+                                                NSString* name)
+{
+    id<MTLFunction> function = [library newFunctionWithName:name];
+    if (function == nil)
+    {
+        cerr << "Erro: kernel '" << [name UTF8String] << "' nao encontrado no metallib." << endl;
+        return nil;
+    }
+    NSError* error = nil;
+    id<MTLComputePipelineState> pipeline =
+        [device newComputePipelineStateWithFunction:function error:&error];
+    if (pipeline == nil)
+    {
+        cerr << "Erro: pipeline de '" << [name UTF8String] << "': "
+             << [[error localizedDescription] UTF8String] << endl;
+    }
+    return pipeline;
+}
+
 bool GpuRunner::initialize(const string& metallibPath,
+                           long long totalNodes,
                            int numberOfAgents,
-                           int numberOfNodes,
-                           const vector<int>& neighbors,
-                           const int* agentPosition,
-                           const unsigned char* agentState,
-                           const unsigned char* agentCounter,
-                           unsigned int baseSeed)
+                           int numberOfGames)
 {
     @autoreleasepool {
         impl->device = MTLCreateSystemDefaultDevice();
@@ -79,129 +143,247 @@ bool GpuRunner::initialize(const string& metallibPath,
             return false;
         }
 
-        id<MTLFunction> markFunction = [library newFunctionWithName:@"markInfected"];
-        id<MTLFunction> stepFunction = [library newFunctionWithName:@"stepAgents"];
-        if (markFunction == nil || stepFunction == nil)
+        impl->fillPipeline = makePipeline(impl->device, library, @"fillSelfLoops");
+        impl->seedPipeline = makePipeline(impl->device, library, @"seedAgents");
+        impl->markPipeline = makePipeline(impl->device, library, @"markInfected");
+        impl->stepPipeline = makePipeline(impl->device, library, @"stepAgents");
+        if (impl->fillPipeline == nil || impl->seedPipeline == nil ||
+            impl->markPipeline == nil || impl->stepPipeline == nil)
         {
-            cerr << "Erro: kernel 'markInfected' ou 'stepAgents' nao encontrado no metallib." << endl;
-            return false;
-        }
-
-        impl->markPipeline = [impl->device newComputePipelineStateWithFunction:markFunction error:&error];
-        if (impl->markPipeline == nil)
-        {
-            cerr << "Erro: pipeline de markInfected: " << [[error localizedDescription] UTF8String] << endl;
-            return false;
-        }
-        impl->stepPipeline = [impl->device newComputePipelineStateWithFunction:stepFunction error:&error];
-        if (impl->stepPipeline == nil)
-        {
-            cerr << "Erro: pipeline de stepAgents: " << [[error localizedDescription] UTF8String] << endl;
             return false;
         }
 
         impl->queue = [impl->device newCommandQueue];
+        impl->numberOfAgents = numberOfAgents;
+        impl->numberOfGames = numberOfGames;
 
-        // StorageModeShared: no Apple Silicon CPU e GPU compartilham a mesma
-        // memoria fisica, entao "subir para a GPU" e so alocar aqui e escrever.
-        // Nao existe copia por barramento como numa placa discreta, e por isso
-        // o host pode ler as contagens todo turno sem custo de transferencia.
-        // Estado e contador tem um byte cada; so a posicao precisa de int. Sao
-        // 6 bytes por agente em vez de 12 - e como o laco de agentes e limitado
-        // por memoria e nao por aritmetica, o que se economiza aqui e tempo, e
-        // nao so RAM.
-        const NSUInteger positionBytes = (NSUInteger) numberOfAgents * sizeof(int);
-        const NSUInteger byteFieldBytes = (NSUInteger) numberOfAgents * sizeof(unsigned char);
-        impl->positionBuffer = [impl->device newBufferWithBytes:agentPosition
-                                                         length:positionBytes
-                                                        options:MTLResourceStorageModeShared];
-        impl->stateBuffer = [impl->device newBufferWithBytes:agentState
-                                                      length:byteFieldBytes
-                                                     options:MTLResourceStorageModeShared];
-        impl->counterBuffer = [impl->device newBufferWithBytes:agentCounter
-                                                        length:byteFieldBytes
+        // Um BIT por no, e nao um byte: o consumidor e uma leitura aleatoria por
+        // agente por turno, entao o que decide o custo e quanto do vetor cabe na
+        // cache. Dividir por oito e a diferenca entre caber e nao caber.
+        impl->maskWords = (uint64_t) ((totalNodes + 31) / 32);
+
+        const NSUInteger neighborBytes =
+            (NSUInteger) totalNodes * Constants::SLOTS * sizeof(int);
+        const NSUInteger maskBytes = (NSUInteger) impl->maskWords * sizeof(uint32_t);
+
+        NSUInteger limit = [impl->device maxBufferLength];
+        if (neighborBytes > limit)
+        {
+            cerr << "Erro: os mapas somam " << (neighborBytes >> 20) << " MB, acima do teto de "
+                 << (limit >> 20) << " MB por MTLBuffer neste device." << endl;
+            return false;
+        }
+
+        impl->neighbors = [impl->device newBufferWithLength:neighborBytes
+                                                    options:MTLResourceStorageModeShared];
+        impl->infectedMask = [impl->device newBufferWithLength:maskBytes
                                                        options:MTLResourceStorageModeShared];
-        impl->neighborsBuffer = [impl->device newBufferWithBytes:neighbors.data()
-                                                          length:neighbors.size() * sizeof(int)
-                                                         options:MTLResourceStorageModeShared];
-        impl->infectedBuffer = [impl->device newBufferWithLength:(NSUInteger) numberOfNodes * sizeof(int)
-                                                         options:MTLResourceStorageModeShared];
+        if (impl->neighbors == nil || impl->infectedMask == nil)
+        {
+            cerr << "Erro: falha ao alocar os buffers do grafo." << endl;
+            return false;
+        }
 
-        impl->params.numberOfAgents = (uint32_t) numberOfAgents;
-        impl->params.numberOfNodes = (uint32_t) numberOfNodes;
-        impl->params.baseSeed = baseSeed;
-        impl->params.turn = 0;
-        impl->params.slots = (uint32_t) Constants::SLOTS;
-        impl->params.exposedTime = Constants::EXPOSED_TIME;
-        impl->params.deathTime = Constants::DEATH_TIME;
-        impl->params.infectionThreshold = Constants::INFECTION_THRESHOLD;
-        impl->params.mortalityThreshold = Constants::MORTALITY_THRESHOLD;
+        impl->step.numberOfAgents = (uint32_t) numberOfAgents;
+        impl->step.numberOfGames = (uint32_t) numberOfGames;
+        impl->step.turn = 0;
+        impl->step.slots = (uint32_t) Constants::SLOTS;
+        impl->step.exposedTime = Constants::EXPOSED_TIME;
+        impl->step.deathTime = Constants::DEATH_TIME;
+        impl->step.infectionThreshold = Constants::INFECTION_THRESHOLD;
+        impl->step.mortalityThreshold = Constants::MORTALITY_THRESHOLD;
+        impl->step.travelThreshold = Constants::TRAVEL_THRESHOLD;
+        impl->step.travelLockTurns = (uint32_t) Constants::TRAVEL_LOCK_TURNS;
 
         return true;
+    }
+}
+
+int* GpuRunner::neighborsAt(long long nodeOffset) const
+{
+    int* base = (int*) [impl->neighbors contents];
+    return base + (size_t) nodeOffset * Constants::SLOTS;
+}
+
+void GpuRunner::fillSelfLoops(long long nodeOffset, int nodes)
+{
+    @autoreleasepool {
+        FillParams params = {};
+        params.base = (uint64_t) nodeOffset * Constants::SLOTS;
+        params.nodes = (uint32_t) nodes;
+        params.padding = 0;
+
+        id<MTLCommandBuffer> command = [impl->queue commandBuffer];
+        id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+        [encoder setComputePipelineState:impl->fillPipeline];
+        [encoder setBuffer:impl->neighbors offset:0 atIndex:0];
+        [encoder setBytes:&params length:sizeof(FillParams) atIndex:1];
+
+        // Grade 2D: x percorre os nos, y percorre os slots. Assim o kernel acha
+        // o indice sem divisao.
+        NSUInteger width = impl->fillPipeline.threadExecutionWidth;
+        [encoder dispatchThreads:MTLSizeMake((NSUInteger) nodes, Constants::SLOTS, 1)
+           threadsPerThreadgroup:MTLSizeMake(width, 1, 1)];
+        [encoder endEncoding];
+        [command commit];
+
+        lock_guard<mutex> guard(impl->commandMutex);
+        impl->lastCommand = command;
+    }
+}
+void GpuRunner::uploadMetadata(const vector<int>& nodeOffset,
+                               const vector<int>& nodeCount,
+                               const vector<int>& firstAgent,
+                               const vector<int>& healthyOf,
+                               const vector<unsigned int>& seeds,
+                               const vector<int>& seedMode,
+                               const vector<int>& seedTarget,
+                               const vector<int>& candidates,
+                               const vector<int>& candidateOffset,
+                               const vector<int>& candidateCount)
+{
+    @autoreleasepool {
+        auto upload = [this](const void* source, size_t bytes) {
+            return [impl->device newBufferWithBytes:source
+                                             length:(NSUInteger) bytes
+                                            options:MTLResourceStorageModeShared];
+        };
+
+        impl->nodeOffset = upload(nodeOffset.data(), nodeOffset.size() * sizeof(int));
+        impl->nodeCount = upload(nodeCount.data(), nodeCount.size() * sizeof(int));
+        impl->firstAgent = upload(firstAgent.data(), firstAgent.size() * sizeof(int));
+        impl->healthyOf = upload(healthyOf.data(), healthyOf.size() * sizeof(int));
+        impl->seeds = upload(seeds.data(), seeds.size() * sizeof(unsigned int));
+        impl->seedMode = upload(seedMode.data(), seedMode.size() * sizeof(int));
+        impl->seedTarget = upload(seedTarget.data(), seedTarget.size() * sizeof(int));
+        impl->candidates = upload(candidates.data(), candidates.size() * sizeof(int));
+        impl->candidateOffset = upload(candidateOffset.data(), candidateOffset.size() * sizeof(int));
+        impl->candidateCount = upload(candidateCount.data(), candidateCount.size() * sizeof(int));
+    }
+}
+
+void GpuRunner::seedAgents()
+{
+    @autoreleasepool {
+        const NSUInteger agents = (NSUInteger) impl->numberOfAgents;
+        impl->positions = [impl->device newBufferWithLength:agents * sizeof(int)
+                                                    options:MTLResourceStorageModeShared];
+        impl->states = [impl->device newBufferWithLength:agents
+                                                 options:MTLResourceStorageModeShared];
+        impl->counters = [impl->device newBufferWithLength:agents
+                                                   options:MTLResourceStorageModeShared];
+        impl->travelLock = [impl->device newBufferWithLength:agents
+                                                     options:MTLResourceStorageModeShared];
+        impl->gameOf = [impl->device newBufferWithLength:agents
+                                                 options:MTLResourceStorageModeShared];
+
+        SeedParams params = {};
+        params.numberOfAgents = (uint32_t) impl->numberOfAgents;
+        params.numberOfGames = (uint32_t) impl->numberOfGames;
+
+        id<MTLCommandBuffer> command = [impl->queue commandBuffer];
+        id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+        [encoder setComputePipelineState:impl->seedPipeline];
+        [encoder setBuffer:impl->positions offset:0 atIndex:0];
+        [encoder setBuffer:impl->states offset:0 atIndex:1];
+        [encoder setBuffer:impl->counters offset:0 atIndex:2];
+        [encoder setBuffer:impl->travelLock offset:0 atIndex:3];
+        [encoder setBuffer:impl->gameOf offset:0 atIndex:4];
+        [encoder setBuffer:impl->firstAgent offset:0 atIndex:5];
+        [encoder setBuffer:impl->healthyOf offset:0 atIndex:6];
+        [encoder setBuffer:impl->nodeCount offset:0 atIndex:7];
+        [encoder setBuffer:impl->seeds offset:0 atIndex:8];
+        [encoder setBuffer:impl->seedMode offset:0 atIndex:9];
+        [encoder setBuffer:impl->seedTarget offset:0 atIndex:10];
+        [encoder setBuffer:impl->candidates offset:0 atIndex:11];
+        [encoder setBuffer:impl->candidateOffset offset:0 atIndex:12];
+        [encoder setBuffer:impl->candidateCount offset:0 atIndex:13];
+        [encoder setBytes:&params length:sizeof(SeedParams) atIndex:14];
+
+        NSUInteger width = impl->seedPipeline.maxTotalThreadsPerThreadgroup;
+        [encoder dispatchThreads:MTLSizeMake((NSUInteger) impl->numberOfAgents, 1, 1)
+           threadsPerThreadgroup:MTLSizeMake(width, 1, 1)];
+        [encoder endEncoding];
+        [command commit];
+        impl->lastCommand = command;
     }
 }
 
 void GpuRunner::runTurn(int turn)
 {
     @autoreleasepool {
-        impl->params.turn = turn;
+        impl->step.turn = turn;
 
-        id<MTLCommandBuffer> commandBuffer = [impl->queue commandBuffer];
+        id<MTLCommandBuffer> command = [impl->queue commandBuffer];
 
-        // 1. Zera infectedAtNode inteiro.
-        //
-        // Um fill de alguns milhares de inteiros pela unidade de blit custa
+        // 1. Zera a mascara inteira. Um fill pela unidade de blit custa
         // microssegundos e dispensa manter a lista esparsa dos nos sujos, que
-        // aqui exigiria uma escrita atomica em append. O caminho de CPU tambem
-        // deixou de manter essa lista, pelo mesmo motivo: com muitos agentes,
-        // zerar numberOfNodes bytes some perto de varrer numberOfAgents.
-        id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
-        [blit fillBuffer:impl->infectedBuffer
-                   range:NSMakeRange(0, [impl->infectedBuffer length])
+        // aqui exigiria uma escrita atomica em append.
+        id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+        [blit fillBuffer:impl->infectedMask
+                   range:NSMakeRange(0, [impl->infectedMask length])
                    value:0];
         [blit endEncoding];
 
         // 2 e 3. Marcacao e passo dos agentes, no mesmo encoder.
         //
         // Um MTLComputeCommandEncoder e serial por padrao, entao o Metal poe a
-        // barreira entre os dois dispatches sozinho. E a barreira importa: o
-        // retrato dos infectados precisa estar completo antes de qualquer
-        // agente ler infectedAtNode.
-        id<MTLComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
+        // barreira entre os dois dispatches sozinho. E a barreira importa: a
+        // mascara precisa estar congelada antes de qualquer agente le-la.
+        id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
 
         [encoder setComputePipelineState:impl->markPipeline];
-        [encoder setBuffer:impl->stateBuffer offset:0 atIndex:0];
-        [encoder setBuffer:impl->positionBuffer offset:0 atIndex:1];
-        [encoder setBuffer:impl->infectedBuffer offset:0 atIndex:2];
-        [encoder setBytes:&impl->params length:sizeof(StepParams) atIndex:3];
+        [encoder setBuffer:impl->positions offset:0 atIndex:0];
+        [encoder setBuffer:impl->states offset:0 atIndex:1];
+        [encoder setBuffer:impl->gameOf offset:0 atIndex:2];
+        [encoder setBuffer:impl->nodeOffset offset:0 atIndex:3];
+        [encoder setBuffer:impl->infectedMask offset:0 atIndex:4];
+        [encoder setBytes:&impl->step length:sizeof(StepParams) atIndex:5];
         NSUInteger markWidth = impl->markPipeline.maxTotalThreadsPerThreadgroup;
-        [encoder dispatchThreads:MTLSizeMake(impl->params.numberOfAgents, 1, 1)
+        [encoder dispatchThreads:MTLSizeMake((NSUInteger) impl->numberOfAgents, 1, 1)
            threadsPerThreadgroup:MTLSizeMake(markWidth, 1, 1)];
 
         [encoder setComputePipelineState:impl->stepPipeline];
-        [encoder setBuffer:impl->positionBuffer offset:0 atIndex:0];
-        [encoder setBuffer:impl->stateBuffer offset:0 atIndex:1];
-        [encoder setBuffer:impl->counterBuffer offset:0 atIndex:2];
-        [encoder setBuffer:impl->neighborsBuffer offset:0 atIndex:3];
-        [encoder setBuffer:impl->infectedBuffer offset:0 atIndex:4];
-        [encoder setBytes:&impl->params length:sizeof(StepParams) atIndex:5];
+        [encoder setBuffer:impl->positions offset:0 atIndex:0];
+        [encoder setBuffer:impl->states offset:0 atIndex:1];
+        [encoder setBuffer:impl->counters offset:0 atIndex:2];
+        [encoder setBuffer:impl->travelLock offset:0 atIndex:3];
+        [encoder setBuffer:impl->gameOf offset:0 atIndex:4];
+        [encoder setBuffer:impl->neighbors offset:0 atIndex:5];
+        [encoder setBuffer:impl->infectedMask offset:0 atIndex:6];
+        [encoder setBuffer:impl->nodeOffset offset:0 atIndex:7];
+        [encoder setBuffer:impl->nodeCount offset:0 atIndex:8];
+        [encoder setBuffer:impl->seeds offset:0 atIndex:9];
+        // setBytes COPIA para dentro do command buffer, entao cada turno leva o
+        // proprio numero de turno mesmo que a execucao aconteca bem depois do
+        // commit. E o que permite enfileirar sem esperar.
+        [encoder setBytes:&impl->step length:sizeof(StepParams) atIndex:10];
         NSUInteger stepWidth = impl->stepPipeline.maxTotalThreadsPerThreadgroup;
-        [encoder dispatchThreads:MTLSizeMake(impl->params.numberOfAgents, 1, 1)
+        [encoder dispatchThreads:MTLSizeMake((NSUInteger) impl->numberOfAgents, 1, 1)
            threadsPerThreadgroup:MTLSizeMake(stepWidth, 1, 1)];
 
         [encoder endEncoding];
-
-        [commandBuffer commit];
-        [commandBuffer waitUntilCompleted];
+        [command commit];
+        impl->lastCommand = command;
     }
 }
 
-const int* GpuRunner::positions() const
+void GpuRunner::finish()
 {
-    return (const int*) [impl->positionBuffer contents];
+    if (impl->lastCommand != nil)
+    {
+        // A fila e ordenada, entao esperar o ultimo espera todos os anteriores.
+        [impl->lastCommand waitUntilCompleted];
+        impl->lastCommand = nil;
+    }
 }
 
 const unsigned char* GpuRunner::states() const
 {
-    return (const unsigned char*) [impl->stateBuffer contents];
+    return (const unsigned char*) [impl->states contents];
+}
+
+const unsigned char* GpuRunner::gameOf() const
+{
+    return (const unsigned char*) [impl->gameOf contents];
 }
