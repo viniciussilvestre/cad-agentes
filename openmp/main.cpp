@@ -49,16 +49,12 @@ int main(int argc, char** argv)
 {
     // --agents e --infected sao TOTAIS, divididos igualmente entre os jogos:
     // com --games 4 --agents 1000, sao 250 saudaveis por jogo.
-    int initialNumberHealthy = 1201884940;
-    int initialNumberInfected = 20000000;
+    int initialNumberHealthy = 60094247;
+    int initialNumberInfected = 1000000;
     int numberOfTurns = 600;
     int numberOfGames = 20;
-    // Zero significa "deixa o OpenMP decidir", que e o padrao dele: o numero de
-    // nucleos logicos, ou o que estiver em OMP_NUM_THREADS.
-    int numberOfThreads = 0;
     // Paralelismo nos dois lacos (jogos e agentes) ou so no de jogos. Escolha
     // explicita, como o numero de threads: ver docs/medicoes.md.
-    bool nested = false;
     unsigned int seed = Constants::DEFAULT_SEED;
     string mapFile = "map.txt";
     SeedMode seedMode = SeedMode::Uniform;
@@ -74,8 +70,7 @@ int main(int argc, char** argv)
         else if (flag == "--turns" && hasValue) { numberOfTurns = atoi(argv[++i]); }
         else if (flag == "--seed" && hasValue) { seed = (unsigned int) strtoul(argv[++i], nullptr, 10); }
         else if (flag == "--games" && hasValue) { numberOfGames = atoi(argv[++i]); }
-        else if (flag == "--threads" && hasValue) { numberOfThreads = atoi(argv[++i]); }
-        else if (flag == "--nested") { nested = true; }
+        // else if (flag == "--threads" && hasValue) { numberOfThreads = atoi(argv[++i]); }
         else if (flag == "--seed-target" && hasValue) { seedTarget = atoi(argv[++i]); }
         else if (flag == "--seed-mode" && hasValue)
         {
@@ -96,13 +91,12 @@ int main(int argc, char** argv)
         }
     }
 
-    if (numberOfThreads > 0)
-    {
-        omp_set_num_threads(numberOfThreads);
-    }
+    // if (numberOfThreads > 0)
+    // {
+    //     omp_set_num_threads(numberOfThreads);
+    // }
 
     Simulation simulation(numberOfGames, initialNumberHealthy, initialNumberInfected);
-    simulation.setNestedParallelism(nested);
 
     if (gameSeeds.empty()) { simulation.setSeed(seed); }
     else { simulation.setSeeds(gameSeeds); }

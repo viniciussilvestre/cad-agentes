@@ -18,6 +18,8 @@ namespace Constants
     constexpr const int resolutionY = {1080};
     constexpr const int SLOTS = {6};
     constexpr const unsigned int DEFAULT_SEED = {62};
+    constexpr const int NUMBER_OF_OUTER_THREADS = {20};
+    constexpr const int NUMBER_OF_INNER_THREADS = {0};
 
     // Chance de um agente trocar de jogo no turno, em porcento.
     constexpr const double TRAVEL_RATE = {1.0};

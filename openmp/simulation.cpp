@@ -93,7 +93,7 @@ void Simulation::initialize()
 
     // Um mapa por jogo, lidos em paralelo. Com 21 mapas de 1,5 GB, em serie
     // isso e um core sozinho por varios minutos enquanto os outros 20 esperam.
-    #pragma omp parallel for schedule(dynamic)
+    #pragma omp parallel for
     for (int index = 0; index < numberOfGames; index++)
     {
         // Divisao igual, com a sobra distribuida um agente por jogo entre os
@@ -144,7 +144,6 @@ void Simulation::step()
     }
     else
     {
-        #pragma omp parallel for
         for (int index = 0; index < numberOfGames; index++)
         {
             games[index].step(turns);
@@ -155,7 +154,6 @@ void Simulation::step()
     // estao sendo lidas e recebendo chegadas, e so aqui e seguro mexer nelas.
     // Esta barreira e o que torna a compactacao segura - por isso ela nao pode
     // subir para dentro de Game::step.
-    #pragma omp parallel for
     for (int index = 0; index < numberOfGames; index++)
     {
         games[index].compactMembers();
