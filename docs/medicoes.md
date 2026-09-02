@@ -6,6 +6,39 @@ repetir experimento e para nao decidir por intuicao o que ja foi medido.
 Regra: nenhum numero aqui e estimativa, salvo onde estiver escrito
 **estimado**.
 
+## Resultado final
+
+Configuracao de producao: 1,222 bilhao de agentes, 600 turnos, 20 ambientes de
+30 milhoes de nos cada - 0,73 trilhao de agente-turnos.
+
+| versao | tempo | vazao | contra 1 thread |
+|---|---|---|---|
+| sequencial | 60 h (2,5 dias) | 3,4 M/s | 1x |
+| OpenMP, `nested=false` | 3 h 02 | 67,1 M/s | **20x** |
+| CUDA, Quadro P6000 | **8 min** | 1.527 M/s | **450x** |
+
+CUDA contra OpenMP: **22,8x**. A placa e de 2016.
+
+O caminho ate aqui nao foi a GPU: foi tirar o que atrapalhava. Bandeira em vez
+de contagem (secao 1), SoA sem ponteiro de volta (secao 2), carga de mapa 10x
+menor (secao 8) - cada uma dessas valia pouco sozinha no sequencial e muito no
+paralelo, e sem elas a versao CUDA teria batido nos mesmos limites.
+
+### Margem de memoria: quase nenhuma
+
+| | |
+|---|---|
+| agentes (8 bytes cada) | 9,1 GiB |
+| mapas (6 slots x 4 bytes por no) | 13,5 GiB |
+| **total** | **22,6 de 24 GiB** |
+
+94% da placa. Um jogo a mais (+0,7 GiB) ainda entra; dois, nao. Aumentar
+agentes custa 8 bytes cada - mais 100 milhoes de agentes sao 0,8 GiB.
+
+Quem paga a conta e o mapa: 726 MB por ambiente, e sao 20. Se a escala precisar
+crescer, o caminho e compartilhar o grafo entre jogos que usam o mesmo arquivo,
+ou aceitar mapas menores - e nao economizar no agente, que ja esta em 8 bytes.
+
 ## Maquinas
 
 | apelido | descricao |
