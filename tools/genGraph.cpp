@@ -64,8 +64,8 @@ static const int MAX_ATTEMPTS = 30;
 
 struct GraphConfig
 {
-    int width = 5500;
-    int height = 5500;
+    int width = 3500;
+    int height = 3500;
     double shortcuts = 0.01;
     int regionsX = 5;
     int regionsY = 2;
