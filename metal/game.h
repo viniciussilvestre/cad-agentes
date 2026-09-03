@@ -29,25 +29,35 @@ using namespace std;
 // Viajar passa a ser escrever dois valores nos proprios slots do agente: o
 // indice do jogo e a posicao. Sem corrida nenhuma.
 //
-// O mapa e efemero no host: existe entre initializeGame e a subida para o
-// device, e releaseHostMap o devolve em seguida. Segurar os vetores ate o fim
-// da simulacao custava centenas de MB por jogo para nada.
+// NAO EXISTE COPIA DO GRAFO NO HOST.
+//
+// A versao CUDA monta a vizinhanca num vector proprio e depois a copia para o
+// device, porque la o dado tem que atravessar o PCIe de qualquer forma. Aqui a
+// memoria e unificada: initializeGame recebe o ponteiro para dentro do proprio
+// MTLBuffer e o parser escreve LA. Some o vector intermediario (nos x 6 x 4
+// bytes por jogo, vivo simultaneamente em cada thread da carga) e some a copia.
+//
+// nodeRegion e regionNodes continuam no host porque so servem para extrair os
+// candidatos da semeadura por regiao; releaseHostMap os devolve logo em seguida.
 class Game
 {
     public:
         int numberOfNodes;
         int numberOfRegions;
 
-        // Grafo do jogo, no host. Sobe para o device concatenado com o dos
-        // outros (ver Simulation) e morre logo depois.
-        vector<int> neighbors;
+        // So o que a semeadura por regiao precisa. A vizinhanca nao mora aqui.
         vector<int> nodeRegion;
         vector<vector<int>> regionNodes;
 
         Game();
 
         void setSeedMode(SeedMode mode, int regionOrNode = 0);
-        void initializeGame(const string& fileName);
+
+        // Escreve a vizinhanca DIRETO em neighbors, que aponta para dentro do
+        // buffer da GPU e ja vem semeado com auto-lacos (ver prefillNeighbors).
+        // expectedNodes vem do cabecalho, lido antes por declaredNodesOf: e o
+        // que fixa o layout do bloco deste jogo.
+        void initializeGame(const string& fileName, int* neighbors, int expectedNodes);
 
         // Le SO o cabecalho do arquivo e devolve o numero de nos declarado.
         //
@@ -68,7 +78,11 @@ class Game
         [[nodiscard]] int seedTargetOf() const { return seedTarget; }
 
     private:
-        int claimSlot(int node, int preferredSlot);
+        // Slot livre e o que ainda aponta para o proprio no: o buffer chega
+        // semeado com auto-lacos, e aresta com origem igual ao destino e
+        // descartada na leitura, entao "aponta para si" nao tem outro
+        // significado possivel.
+        int claimSlot(int* neighbors, int node, int preferredSlot) const;
 
         SeedMode seedMode = SeedMode::Uniform;
         int seedTarget = 0;

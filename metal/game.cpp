@@ -49,7 +49,6 @@ void Game::releaseHostMap()
 {
     // swap com temporario vazio, e nao clear(): clear zera o tamanho e mantem a
     // capacidade, que aqui e justamente o que se quer devolver.
-    vector<int>().swap(neighbors);
     vector<int>().swap(nodeRegion);
     vector<vector<int>>().swap(regionNodes);
 }
@@ -67,9 +66,9 @@ static int cardinalSlot(int deltaX, int deltaY)
     return (deltaX > 0) ? 2 : 3;       // direita, esquerda
 }
 
-int Game::claimSlot(int node, int preferredSlot)
+int Game::claimSlot(int* neighbors, int node, int preferredSlot) const
 {
-    if (neighbors[preferredSlot * numberOfNodes + node] == -1)
+    if (neighbors[preferredSlot * numberOfNodes + node] == node)
     {
         return preferredSlot;
     }
@@ -78,14 +77,14 @@ int Game::claimSlot(int node, int preferredSlot)
     // cardinais livres.
     for (int slot = 4; slot < Constants::SLOTS; slot++)
     {
-        if (neighbors[slot * numberOfNodes + node] == -1)
+        if (neighbors[slot * numberOfNodes + node] == node)
         {
             return slot;
         }
     }
     for (int slot = 0; slot < 4; slot++)
     {
-        if (neighbors[slot * numberOfNodes + node] == -1)
+        if (neighbors[slot * numberOfNodes + node] == node)
         {
             return slot;
         }
@@ -149,7 +148,7 @@ int Game::declaredNodesOf(const string& fileName)
     return declaredNodes;
 }
 
-void Game::initializeGame(const string& fileName)
+void Game::initializeGame(const string& fileName, int* neighbors, int expectedNodes)
 {
     // O arquivo e lido em fluxo, uma linha por vez, e nao carregado inteiro
     // para um vector<string>. Guardar as 91 milhoes de linhas de um mapa de
@@ -168,6 +167,10 @@ void Game::initializeGame(const string& fileName)
         exit(EXIT_FAILURE);
     }
 
+    // O bloco deste jogo no buffer ja foi dimensionado por declaredNodesOf, e
+    // claimSlot indexa por numberOfNodes - entao ele precisa valer desde ja.
+    numberOfNodes = expectedNodes;
+
     int declaredNodes = 0;
     int declaredEdges = 0;
     const char* cursor = line.c_str();
@@ -185,6 +188,11 @@ void Game::initializeGame(const string& fileName)
 
     // As coordenadas sao LOCAIS: servem so para classificar a direcao das
     // arestas enquanto o arquivo e lido, e morrem com a funcao.
+    // A regiao de cada no so serve para extrair os candidatos da semeadura por
+    // regiao. Nos outros modos, guardar isso e um vetor de nos inteiros por
+    // jogo vivo em cada thread da carga, para nada.
+    const bool keepRegions = (seedMode == SeedMode::SingleRegion);
+
     vector<int> coordinateX;
     vector<int> coordinateY;
     vector<int> degree;
@@ -192,7 +200,10 @@ void Game::initializeGame(const string& fileName)
     {
         coordinateX.reserve((size_t) declaredNodes);
         coordinateY.reserve((size_t) declaredNodes);
-        nodeRegion.reserve((size_t) declaredNodes);
+        if (keepRegions)
+        {
+            nodeRegion.reserve((size_t) declaredNodes);
+        }
     }
 
     int blankLines = 0;
@@ -229,7 +240,10 @@ void Game::initializeGame(const string& fileName)
             }
             coordinateX.push_back(x_coordinate);
             coordinateY.push_back(y_coordinate);
-            nodeRegion.push_back(region);
+            if (keepRegions)
+            {
+                nodeRegion.push_back(region);
+            }
             continue;
         }
 
@@ -238,16 +252,17 @@ void Game::initializeGame(const string& fileName)
             continue;
         }
 
-        // Primeira linha de aresta: o numero de nos ja esta fechado, entao a
-        // vizinhanca pode ser dimensionada.
+        // Primeira linha de aresta: fecha a contagem de nos e confere contra o
+        // cabecalho. numberOfNodes ja veio de expectedNodes, porque o bloco
+        // deste jogo dentro do buffer foi dimensionado antes do parse - se o
+        // cabecalho mentir, as escrituras cairiam sobre o mapa do vizinho.
         if (!nodesClosed)
         {
-            if (coordinateX.empty()) {
-                cerr << "Erro: nenhum no lido de '" << fileName << "'." << endl;
+            if ((int) coordinateX.size() != expectedNodes) {
+                cerr << "Erro: '" << fileName << "' declara " << expectedNodes
+                     << " nos no cabecalho mas lista " << coordinateX.size() << "." << endl;
                 exit(EXIT_FAILURE);
             }
-            numberOfNodes = (int) coordinateX.size();
-            neighbors.assign((size_t) numberOfNodes * Constants::SLOTS, -1);
             degree.assign((size_t) numberOfNodes, 0);
             nodesClosed = true;
         }
@@ -285,8 +300,8 @@ void Game::initializeGame(const string& fileName)
 
         int deltaX = coordinateX[destination_node] - coordinateX[source_node];
         int deltaY = coordinateY[destination_node] - coordinateY[source_node];
-        int forwardSlot = claimSlot(source_node, cardinalSlot(deltaX, deltaY));
-        int backwardSlot = claimSlot(destination_node, cardinalSlot(-deltaX, -deltaY));
+        int forwardSlot = claimSlot(neighbors, source_node, cardinalSlot(deltaX, deltaY));
+        int backwardSlot = claimSlot(neighbors, destination_node, cardinalSlot(-deltaX, -deltaY));
         if (forwardSlot == -1 || backwardSlot == -1) {
             cerr << "Erro: sem slot livre para a aresta (" << source_node << ", "
                  << destination_node << "); teto de " << Constants::SLOTS << " arestas por no." << endl;
@@ -296,14 +311,12 @@ void Game::initializeGame(const string& fileName)
         neighbors[backwardSlot * numberOfNodes + destination_node] = source_node;
     }
 
-    if (!nodesClosed)
+    // Mapa sem nenhuma aresta: o bloco ja esta correto, so com auto-lacos.
+    if ((int) coordinateX.size() != expectedNodes)
     {
-        if (coordinateX.empty()) {
-            cerr << "Erro: nenhum no lido de '" << fileName << "'." << endl;
-            exit(EXIT_FAILURE);
-        }
-        numberOfNodes = (int) coordinateX.size();
-        neighbors.assign((size_t) numberOfNodes * Constants::SLOTS, -1);
+        cerr << "Erro: '" << fileName << "' declara " << expectedNodes
+             << " nos no cabecalho mas lista " << coordinateX.size() << "." << endl;
+        exit(EXIT_FAILURE);
     }
 
     // ------------------------------------------------------------------
@@ -325,26 +338,18 @@ void Game::initializeGame(const string& fileName)
     //    slots diferentes e nada diverge. Um laco de rejeicao sobre grau
     //    variavel serializaria o warp pelo pior caso.
     //
-    // O PREENCHIMENTO ACONTECE NA GPU (ver fillSelfLoops em kernels.metal). O vetor
-    // sobe com os -1 e e corrigido la, porque a passada e uma leitura e uma
-    // escrita sobre os SLOTS * numberOfNodes inteiros do mapa - centenas de MB
-    // que a CPU nao tem motivo para tocar de novo: depois da subida ninguem
-    // mais le este vetor no host.
+    // O PREENCHIMENTO JA ACONTECEU: prefillNeighbors semeou o bloco inteiro com
+    // auto-lacos na GPU ANTES deste parse, e o laco acima so sobrescreveu os
+    // slots que viraram aresta. Nao ha passada de correcao, nao ha sentinela -1
+    // e nao ha copia: o parser escreveu direto no buffer que o kernel le.
     // ------------------------------------------------------------------
 
-    // O cabecalho e usado por declaredNodesOf para dimensionar o vetor
-    // concatenado ANTES do parse. Se ele mentir, o deslocamento de todos os
-    // jogos seguintes sai errado em silencio - dai a checagem ser fatal.
-    if (numberOfNodes != declaredNodes)
+    if (keepRegions)
     {
-        cerr << "Erro: '" << fileName << "' declara " << declaredNodes
-             << " nos no cabecalho mas lista " << numberOfNodes << "." << endl;
-        exit(EXIT_FAILURE);
-    }
-
-    regionNodes.assign(numberOfRegions, vector<int>());
-    for (int node = 0; node < numberOfNodes; node++)
-    {
-        regionNodes[nodeRegion[node]].emplace_back(node);
+        regionNodes.assign(numberOfRegions, vector<int>());
+        for (int node = 0; node < numberOfNodes; node++)
+        {
+            regionNodes[nodeRegion[node]].emplace_back(node);
+        }
     }
 }

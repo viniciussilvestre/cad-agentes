@@ -127,34 +127,51 @@ void Simulation::prescanMaps()
     }
 }
 
-// Parse em paralelo, escrevendo direto no buffer final.
+// Carga em duas fases, e a ordem entre elas e o ponto todo desta versao.
 //
-// A versao CUDA precisa de um pipeline de streams com buffers fixados, porque
-// la o grafo tem que atravessar o PCIe. Aqui a memoria e unificada: o vetor que
-// o parser preenche JA e o que o kernel le, entao a "subida" e um memcpy dentro
-// da mesma RAM - e o fillSelfLoops roda em cima dele sem mais nada.
+// A CUDA faz parse -> copia para buffer fixado -> DMA para o device -> kernel
+// de correcao, com um pipeline de streams para esconder o PCIe atras do parse.
+// Sao tres passadas completas sobre o maior array do programa, e existem porque
+// o dado precisa mudar de memoria.
 //
-// Com 24 arquivos de 1,5 GB, em serie a leitura leva minutos de um core so
-// enquanto os outros esperam. Por isso o laco e paralelo mesmo na versao de GPU.
+// Aqui o dado nao muda de memoria. Entao:
+//
+//   1. a GPU semeia o buffer INTEIRO com auto-lacos, de uma vez;
+//   2. o parser da CPU sobrescreve, direto no mesmo buffer, so os slots que
+//      viraram aresta.
+//
+// Uma escrita sequencial na GPU mais escritas espalhadas da CPU. Sem vetor
+// intermediario, sem memcpy, sem passada de correcao. E o que a memoria
+// unificada compra neste programa - o laco de turnos nao muda nada, porque la
+// os dois modelos ja mantem tudo residente na GPU.
+//
+// O laco de parse e paralelo porque a leitura de arquivo domina: com dezenas de
+// mapas grandes, em serie e um core sozinho enquanto os outros esperam.
 void Simulation::loadMaps()
 {
     int numberOfGames = (int) games.size();
     candidatesOf.assign((size_t) numberOfGames, vector<int>());
 
+    // Fase 1. Precisa terminar antes de qualquer parse: a CPU vai sobrescrever
+    // exatamente estas posicoes, e sem a barreira o kernel poderia apagar uma
+    // aresta ja escrita.
+    for (int index = 0; index < numberOfGames; index++)
+    {
+        gpu.prefillNeighbors(nodeOffset[(size_t) index], nodeCount[(size_t) index]);
+    }
+    gpu.finish();
+
+    // Fase 2. Buffers StorageModeShared no Apple Silicon sao coerentes, entao
+    // estas escritas ficam visiveis para a GPU sem sincronizacao explicita -
+    // nao ha didModifyRange a chamar, que e coisa do modo Managed.
     #pragma omp parallel for schedule(dynamic)
     for (int index = 0; index < numberOfGames; index++)
     {
         Game& game = games[(size_t) index];
-        game.initializeGame(mapFiles[(size_t) index]);
+        game.initializeGame(mapFiles[(size_t) index],
+                            gpu.neighborsAt(nodeOffset[(size_t) index]),
+                            nodeCount[(size_t) index]);
         game.validateSeeding();
-
-        if (game.numberOfNodes != nodeCount[(size_t) index])
-        {
-            cerr << "Erro: '" << mapFiles[(size_t) index] << "' declara "
-                 << nodeCount[(size_t) index] << " nos no cabecalho mas lista "
-                 << game.numberOfNodes << "." << endl;
-            exit(EXIT_FAILURE);
-        }
 
         // Candidatos da semeadura por regiao, copiados AQUI porque regionNodes
         // morre no fim desta iteracao.
@@ -163,19 +180,8 @@ void Simulation::loadMaps()
             candidatesOf[(size_t) index] = game.regionNodes[(size_t) game.seedTargetOf()];
         }
 
-        int* target = gpu.neighborsAt(nodeOffset[(size_t) index]);
-        memcpy(target, game.neighbors.data(), game.neighbors.size() * sizeof(int));
-
-        // O mapa sobe com os -1 de slot livre; o auto-laco e preenchido na GPU,
-        // que e onde o vetor vive daqui em diante.
-        gpu.fillSelfLoops(nodeOffset[(size_t) index], game.numberOfNodes);
-
-        // Sao centenas de MB por jogo, e ninguem mais le este vetor no host.
         game.releaseHostMap();
     }
-
-    // O fillSelfLoops de cada jogo precisa ter rodado antes do primeiro turno.
-    gpu.finish();
 }
 
 void Simulation::uploadMetadata()

@@ -46,28 +46,34 @@ struct StepParams
     uint travelLockTurns;
 };
 
-// Auto-laco nos slots vazios, na GPU.
+// Auto-laco em TODOS os slots, ANTES do parse.
 //
-// O host sobe o mapa ainda com os -1 que claimSlot usa como sentinela de slot
-// livre, e a correcao acontece aqui. A passada e uma leitura e uma escrita
-// sobre SLOTS * nodes inteiros - centenas de MB por jogo - e depois da subida
-// ninguem mais le esse vetor no host, entao nao ha motivo para a CPU gastar uma
-// segunda passada nele.
+// A versao CUDA faz o contrario: sobe o mapa com -1 nos slots livres e corrige
+// depois, porque la o vetor tem que atravessar o PCIe de qualquer jeito e uma
+// passada extra do lado certo do barramento e de graca.
+//
+// Com memoria unificada nao ha subida: o parser da CPU escreve no MESMO
+// endereco que o kernel le. Entao a ordem se inverte - a GPU semeia o buffer
+// inteiro com auto-lacos primeiro, e o parser so sobrescreve os slots que
+// viraram aresta de verdade. "Slot livre" deixa de ser -1 e passa a ser
+// "aponta para o proprio no", o que e verdade porque aresta com origem igual ao
+// destino e descartada na leitura.
+//
+// Isso apaga duas passadas completas sobre o maior array do programa: o memset
+// de -1 e a correcao condicional. Sobra uma escrita sequencial na GPU, que e
+// onde a banda esta.
 //
 // Grade 2D: x e o no, y e o slot. Assim o indice sai sem divisao.
-kernel void fillSelfLoops(device int* neighbors [[buffer(0)]],
-                          constant FillParams& params [[buffer(1)]],
-                          uint2 gid [[thread_position_in_grid]])
+kernel void prefillNeighbors(device int* neighbors [[buffer(0)]],
+                             constant FillParams& params [[buffer(1)]],
+                             uint2 gid [[thread_position_in_grid]])
 {
     if (gid.x >= params.nodes)
     {
         return;
     }
     ulong at = params.base + (ulong) gid.y * (ulong) params.nodes + (ulong) gid.x;
-    if (neighbors[at] == -1)
-    {
-        neighbors[at] = (int) gid.x;
-    }
+    neighbors[at] = (int) gid.x;
 }
 
 // Semeadura. Turno -1 e o sorteio uniforme; turno -2 e o da semeadura por

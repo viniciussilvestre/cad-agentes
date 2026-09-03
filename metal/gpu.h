@@ -42,7 +42,7 @@ class GpuRunner
 
         // Preenche os slots vazios (-1) com auto-laco, no mapa recem-escrito.
         // Enfileira e volta; quem espera e finish().
-        void fillSelfLoops(long long nodeOffset, int nodes);
+        void prefillNeighbors(long long nodeOffset, int nodes);
 
         // Metadados por jogo. Todos os vetores precisam ter numberOfGames
         // entradas, menos candidates, que e a concatenacao.

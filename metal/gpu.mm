@@ -76,7 +76,7 @@ struct GpuRunner::Impl
     // ordenada, esperar o ultimo espera todos.
     //
     // O mutex existe por causa da carga dos mapas: ela roda em paralelo e cada
-    // thread enfileira o proprio fillSelfLoops. A MTLCommandQueue ja e segura
+    // thread enfileira o proprio prefillNeighbors. A MTLCommandQueue ja e segura
     // para criar command buffers de varias threads; quem nao e segura e esta
     // variavel. O laco de turnos e serial e nao disputa nada.
     id<MTLCommandBuffer> lastCommand = nil;
@@ -143,7 +143,7 @@ bool GpuRunner::initialize(const string& metallibPath,
             return false;
         }
 
-        impl->fillPipeline = makePipeline(impl->device, library, @"fillSelfLoops");
+        impl->fillPipeline = makePipeline(impl->device, library, @"prefillNeighbors");
         impl->seedPipeline = makePipeline(impl->device, library, @"seedAgents");
         impl->markPipeline = makePipeline(impl->device, library, @"markInfected");
         impl->stepPipeline = makePipeline(impl->device, library, @"stepAgents");
@@ -205,7 +205,7 @@ int* GpuRunner::neighborsAt(long long nodeOffset) const
     return base + (size_t) nodeOffset * Constants::SLOTS;
 }
 
-void GpuRunner::fillSelfLoops(long long nodeOffset, int nodes)
+void GpuRunner::prefillNeighbors(long long nodeOffset, int nodes)
 {
     @autoreleasepool {
         FillParams params = {};

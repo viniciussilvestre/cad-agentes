@@ -151,6 +151,44 @@ formato esperado para uma carga com dois acessos aleatorios por agente por
 turno e quase nenhuma aritmetica: o servidor tem mais nucleos, a GPU tem mais
 requisicoes de memoria em voo.
 
+### Quanto a memoria unificada rende
+
+A pergunta que motivou a versao Metal. Medido tirando da carga tudo o que so
+existe porque a CUDA precisa atravessar o PCIe:
+
+1. o parser passou a escrever DIRETO no `MTLBuffer`, sem `vector` intermediario
+   nem `memcpy`;
+2. o auto-laco passou a ser semeado ANTES do parse, na GPU, sobre o buffer
+   inteiro - some a sentinela `-1` e some a passada de correcao;
+3. `nodeRegion`/`regionNodes` so sao montados quando a semeadura e por regiao.
+
+**mac**, 20 mapas de 1M nos, 10 threads na carga:
+
+| | pico RSS | tempo de carga |
+|---|---|---|
+| como a CUDA faz (copia + correcao) | 0,87 GB | 0,55-0,61 s |
+| escrita direta | 0,64 GB | 0,56-0,69 s |
+| mais o descarte das regioes | **0,58 GB** | **0,51 s** |
+
+**O ganho e memoria, nao tempo: -33%, ou 290 MB.** Bate com a previsao - o que
+sumiu foi `threads x nos x SLOTS x 4 bytes` de copias transitorias, 240 MB dos
+quais so da vizinhanca.
+
+O tempo quase nao muda porque o `memcpy` nunca foi o gargalo: ler e parsear o
+texto domina a carga. E o laco de turnos nao muda **nada** (2,35 s para 400
+turnos, antes e depois), o que faz sentido - em regime os dois modelos ja mantem
+tudo residente na GPU, e nao ha transferencia nenhuma para economizar.
+
+Resumo honesto: a memoria unificada paga no **setup**, nao no laco. E o piso
+agora e o proprio buffer concatenado (0,48 GB com 1 thread); os 100 MB que
+sobram de transitorio sao o rascunho do parser (coordenadas e grau), que nao da
+para eliminar sem streamar o parse.
+
+Contrapartida da escrita direta: o buffer precisa ser dimensionado ANTES do
+parse, entao o cabecalho de cada mapa passa a ser contrato. Se ele mentir sobre
+o numero de nos, as escritas caem sobre o mapa do vizinho - por isso a
+conferencia contra `declaredNodesOf` e fatal.
+
 ## 6. Multiplos ambientes: onde colocar o OpenMP
 
 Com `Simulation` rodando N jogos, ha dois lacos: os ambientes por fora, os
