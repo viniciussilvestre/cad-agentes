@@ -19,3 +19,6 @@ map_*.txt
 # saida do cmake
 cmake-build-debug/
 build/
+
+# saida das varreduras de desempenho
+bench/
