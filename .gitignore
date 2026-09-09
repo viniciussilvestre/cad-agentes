@@ -5,6 +5,7 @@ GameC
 GameC_omp
 GameC_metal
 GameC_cuda
+GameC_rocm
 runTests
 runTests_omp
 kernels.metallib
