@@ -151,43 +151,54 @@ formato esperado para uma carga com dois acessos aleatorios por agente por
 turno e quase nenhuma aritmetica: o servidor tem mais nucleos, a GPU tem mais
 requisicoes de memoria em voo.
 
-### Quanto a memoria unificada rende
+## 5b. MPI contra OpenMP no laco de jogos
 
-A pergunta que motivou a versao Metal. Medido tirando da carga tudo o que so
-existe porque a CUDA precisa atravessar o PCIe:
+A pergunta era: um ou outro, quanto custa trocar memoria compartilhada por
+troca de mensagem no MESMO laco. A comparacao estrutural certa e contra
+`GameC_omp_games`, que tambem paraleliza os ambientes - `GameC_omp` paraleliza
+os agentes de cada um, que e outra decomposicao.
 
-1. o parser passou a escrever DIRETO no `MTLBuffer`, sem `vector` intermediario
-   nem `memcpy`;
-2. o auto-laco passou a ser semeado ANTES do parse, na GPU, sobre o buffer
-   inteiro - some a sentinela `-1` e some a passada de correcao;
-3. `nodeRegion`/`regionNodes` so sao montados quando a semeadura e por regiao.
+**mac** (10 nucleos logicos), 8 jogos, 880 mil agentes, 100 turnos, melhor de 3:
 
-**mac**, 20 mapas de 1M nos, 10 threads na carga:
+| unidades | omp-jogos | mpi | mpi / omp |
+|---|---|---|---|
+| 1 | 3,242 s | 3,237 s | 1,00 |
+| 2 | 1,802 s | 1,874 s | 1,04 |
+| 4 | 1,002 s | 1,020 s | 1,02 |
+| 8 | 0,602 s | 0,637 s | 1,06 |
 
-| | pico RSS | tempo de carga |
-|---|---|---|
-| como a CUDA faz (copia + correcao) | 0,87 GB | 0,55-0,61 s |
-| escrita direta | 0,64 GB | 0,56-0,69 s |
-| mais o descarte das regioes | **0,58 GB** | **0,51 s** |
+Sequencial de referencia: 3,191 s.
 
-**O ganho e memoria, nao tempo: -33%, ou 290 MB.** Bate com a previsao - o que
-sumiu foi `threads x nos x SLOTS x 4 bytes` de copias transitorias, 240 MB dos
-quais so da vizinhanca.
+**A mensagem custa de 2% a 6%.** Muito menos que no gerador (secao 8, onde o
+MPI perdia 79%), e a razao e o que se comunica: com TRAVEL_RATE de 1%, sao
+~8.800 viajantes por turno a 16 bytes = 141 KB por turno em toda a malha, um
+`Alltoallv` so. Em 100 turnos, 14 MB no total. O `mpirun` paga criacao de
+processo uma vez e amortiza ao longo da corrida, enquanto no gerador a corrida
+inteira durava segundos.
 
-O tempo quase nao muda porque o `memcpy` nunca foi o gargalo: ler e parsear o
-texto domina a carga. E o laco de turnos nao muda **nada** (2,35 s para 400
-turnos, antes e depois), o que faz sentido - em regime os dois modelos ja mantem
-tudo residente na GPU, e nao ha transferencia nenhuma para economizar.
+### O que o MPI ganha de quebra
 
-Resumo honesto: a memoria unificada paga no **setup**, nao no laco. E o piso
-agora e o proprio buffer concatenado (0,48 GB com 1 thread); os 100 MB que
-sobram de transitorio sao o rascunho do parser (coordenadas e grau), que nao da
-para eliminar sem streamar o parse.
+**Determinismo.** A secao 7 registra que a versao OpenMP com varios jogos e
+varias threads diverge da sequencial, porque quem faz turno duplo depende do
+escalonamento. No MPI isso nao existe: as chegadas sao aplicadas na barreira
+entre turnos, entao nao ha "jogo que ainda nao andou". Conferido - `-n 1`,
+`-n 2`, `-n 4` e `-n 8` dao saida **identica**, e com `--games 1` a saida bate
+byte a byte com a do `GameC`.
 
-Contrapartida da escrita direta: o buffer precisa ser dimensionado ANTES do
-parse, entao o cabecalho de cada mapa passa a ser contrato. Se ele mentir sobre
-o numero de nos, as escritas caem sobre o mapa do vizinho - por isso a
-conferencia contra `declaredNodesOf` e fatal.
+O preco disso e que a versao MPI difere da sequencial quando ha varios jogos,
+pela ausencia do turno duplo - do mesmo jeito que a Metal e a CUDA.
+
+**Memoria de mapa.** Cada rank carrega so os mapas dos jogos que possui. E o
+motivo real para usar MPI aqui: com 28 jogos e 4 nos, cada maquina segura sete
+grafos em vez de 28.
+
+### Teto
+
+O paralelismo do MPI para no numero de jogos: o laco de agentes de um jogo nao
+e dividido entre ranks. Dividi-lo exigiria replicar `infectedAtNode` e reduzi-lo
+todo turno - com mapas de 1M nos sao 125 KB por jogo por turno como bitmask,
+tolerave; com os de 100M nos sao 12,5 MB, e ai o coletivo passa a custar mais
+que o trabalho que economiza.
 
 ## 6. Multiplos ambientes: onde colocar o OpenMP
 

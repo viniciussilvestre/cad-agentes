@@ -19,16 +19,70 @@ endif
 
 # CUDA: o nvcc raramente esta no PATH. CUDA_ARCH precisa bater com a placa -
 # sm_61 Pascal (Quadro P6000), sm_80 Ampere (A100), sm_90 Hopper. Toolkits a
-# partir do 13 nao geram mais codigo para Pascal nem Volta, entao o 12.x e o
-# que cobre placa antiga e A100 ao mesmo tempo.
+# partir do 13 nao geram mais codigo para Pascal nem Volta.
+#
+# Por isso a arquitetura nao pode ser um numero fixo: com o 13 instalado,
+# -arch=sm_61 nao e aviso, e "nvcc fatal: Unsupported gpu architecture", e o
+# `make` inteiro morria ali. Quem sabe o que o toolkit gera e o proprio
+# toolkit, entao a lista sai de --list-gpu-code em vez de ser adivinhada pela
+# versao.
 # Para sobrescrever: make genGraph_cuda CUDA_ARCH=sm_80
 NVCC      ?= $(shell command -v nvcc 2>/dev/null || echo /usr/local/cuda/bin/nvcc)
-CUDA_ARCH ?= sm_61
 HAVE_NVCC := $(shell test -x "$(NVCC)" && echo 1)
 ifeq ($(HAVE_NVCC),1)
-  CUDA_TARGET = GameC_cuda genGraph_cuda
+  NVCC_CODES := $(shell "$(NVCC)" --list-gpu-code 2>/dev/null)
+endif
+
+# sm_61 continua o padrao onde o toolkit ainda o suporta - e a placa antiga do
+# lab. Onde nao suporta, cai na mais antiga que ele gera, que e a que cobre
+# mais placa.
+ifneq ($(filter sm_61,$(NVCC_CODES)),)
+  CUDA_ARCH ?= sm_61
+else ifneq ($(NVCC_CODES),)
+  CUDA_ARCH ?= $(firstword $(NVCC_CODES))
 else
-  CUDA_TARGET =
+  CUDA_ARCH ?= sm_61
+endif
+
+# CUDA e OPCIONAL. Ter o nvcc no disco nao quer dizer que ele compila para a
+# arquitetura pedida, entao o alvo so entra no `all` quando os dois batem -
+# do contrario sai de fora, como ja acontece com Metal, MPI e ROCm.
+#
+# Pedir `make GameC_cuda` na mao continua valendo e continua falhando alto: se
+# alguem pediu CUDA por nome, o erro do nvcc e exatamente o que se quer ver.
+CUDA_TARGET =
+ifeq ($(HAVE_NVCC),1)
+ifneq ($(filter $(CUDA_ARCH),$(NVCC_CODES)),)
+  CUDA_TARGET = GameC_cuda genGraph_cuda
+endif
+endif
+
+# ROCm/HIP: mesma ideia do nvcc, com um detalhe a mais. O hipcc precisa saber a
+# arquitetura EXATA da placa - gfx90a (MI200), gfx942 (MI300), gfx1030 (RDNA2),
+# gfx1100 (RDNA3) - porque, ao contrario do PTX da NVIDIA, nao ha um formato
+# intermediario que o driver compile na hora. Binario de gfx errado nao roda.
+#
+# Por isso a arquitetura sai do rocminfo da propria maquina, e nao de um padrao
+# fixo: nao existe um gfx que sirva de aposta razoavel para todo mundo.
+# Para sobrescrever: make GameC_rocm ROCM_ARCH=gfx90a
+ROCM_PATH  ?= /opt/rocm
+HIPCC      ?= $(shell command -v hipcc 2>/dev/null || echo $(ROCM_PATH)/bin/hipcc)
+HAVE_HIPCC := $(shell test -x "$(HIPCC)" && echo 1)
+ROCM_FOUND := $(shell $(ROCM_PATH)/bin/rocminfo 2>/dev/null | grep -m1 -oE 'gfx[0-9a-f]+')
+ROCM_ARCH  ?= $(if $(ROCM_FOUND),$(ROCM_FOUND),native)
+
+# ROCm e OPCIONAL pelo mesmo motivo que CUDA. Ter o hipcc instalado nao quer
+# dizer que ha placa da AMD nesta maquina: sem uma, --offload-arch=native nao
+# tem o que detectar e o alvo derrubaria o `all` inteiro.
+#
+# A condicao aceita os dois caminhos - achou GPU aqui, ou alguem disse a
+# arquitetura na mao. O segundo e o que permite compilar num login node sem
+# placa para rodar depois no no de computo: make GameC_rocm ROCM_ARCH=gfx90a.
+ROCM_TARGET =
+ifeq ($(HAVE_HIPCC),1)
+ifneq ($(ROCM_FOUND)$(filter-out native,$(ROCM_ARCH)),)
+  ROCM_TARGET = GameC_rocm
+endif
 endif
 
 # MPI: o mpicxx raramente esta no PATH em instalacao local, entao procura
@@ -36,7 +90,7 @@ endif
 MPICXX     ?= $(shell command -v mpicxx 2>/dev/null || echo /opt/openmpi/bin/mpicxx)
 HAVE_MPICXX := $(shell test -x "$(MPICXX)" && echo 1)
 ifeq ($(HAVE_MPICXX),1)
-  MPI_TARGET = genGraph_mpi
+  MPI_TARGET = GameC_mpi genGraph_mpi
 else
   MPI_TARGET =
 endif
@@ -58,7 +112,7 @@ BASE_HDRS = base/simulation.h base/game.h base/player.h base/pool.h base/enums.h
 OMP_SRCS  = openmp/main.cpp openmp/simulation.cpp openmp/game.cpp openmp/player.cpp
 OMP_HDRS  = openmp/simulation.h openmp/game.h openmp/player.h openmp/pool.h openmp/enums.h openmp/constants.h
 
-all: GameC GameC_omp $(METAL_TARGETS) $(GENERATOR) $(MPI_TARGET) $(CUDA_TARGET)
+all: GameC GameC_omp $(METAL_TARGETS) $(GENERATOR) $(MPI_TARGET) $(CUDA_TARGET) $(ROCM_TARGET)
 
 # Cada versao compila da propria pasta, sem fonte compartilhada: se uma quebrar,
 # a outra continua de pe.
@@ -67,6 +121,25 @@ GameC: $(BASE_SRCS) $(BASE_HDRS)
 
 GameC_omp: $(OMP_SRCS) $(OMP_HDRS)
 	$(CXX) $(CXXFLAGS) $(OMPFLAGS) -Iopenmp -o $@ $(OMP_SRCS) $(OMPLIBS)
+
+# Onde fica o paralelismo, a partir do MESMO fonte. Ver o comentario sobre as
+# tres variantes em openmp/simulation.cpp, acima de Simulation::step.
+#
+# Sao binarios separados, e nao uma flag de linha de comando, porque desligar
+# uma regiao paralela com clausula if() nao a desliga - so a esvazia, e as
+# regioes de dentro passam a contar como aninhadas. A macro resolve isso antes
+# do compilador chegar no pragma.
+#
+# A saida dos tres tem de ser identica entre si e a do GameC: o laco e
+# paralelizavel por construcao, entao onde as threads entram nao pode mudar
+# resultado. Se mudar, ha race - use 'make golden-omp' para conferir.
+GameC_omp_games: $(OMP_SRCS) $(OMP_HDRS)
+	$(CXX) $(CXXFLAGS) $(OMPFLAGS) -DPAR_GAMES -Iopenmp -o $@ $(OMP_SRCS) $(OMPLIBS)
+
+GameC_omp_nested: $(OMP_SRCS) $(OMP_HDRS)
+	$(CXX) $(CXXFLAGS) $(OMPFLAGS) -DPAR_NESTED -Iopenmp -o $@ $(OMP_SRCS) $(OMPLIBS)
+
+omp-variants: GameC_omp GameC_omp_games GameC_omp_nested
 
 ifdef HAVE_METAL
 
@@ -105,6 +178,16 @@ $(GENERATOR): tools/genGraph.cpp
 genGraph_mpi: tools/genGraph.cpp
 	$(MPICXX) $(CXXFLAGS) -DUSE_MPI -o $@ tools/genGraph.cpp
 
+# MPI puro, sem OpenMP: o paralelismo e um so, para a comparacao contra a versao
+# OpenMP isolar memoria compartilhada contra troca de mensagem. Rodar com
+# mpirun -n N, onde N nao passa do numero de jogos - ver mpi/simulation.h.
+MPI_SRCS = mpi/main.cpp mpi/simulation.cpp mpi/game.cpp mpi/player.cpp
+MPI_HDRS = mpi/simulation.h mpi/game.h mpi/player.h mpi/pool.h mpi/departure.h \
+           mpi/enums.h mpi/constants.h mpi/rng.h
+
+GameC_mpi: $(MPI_SRCS) $(MPI_HDRS)
+	$(MPICXX) $(CXXFLAGS) -Impi -o $@ $(MPI_SRCS)
+
 # A construcao do grafo vai para a GPU; a emissao do arquivo continua na CPU,
 # que e onde esta a maior parte do tempo. Ver docs/medicoes.md.
 #
@@ -134,6 +217,23 @@ GameC_cuda: $(CUDA_GAME_SRCS) $(CUDA_GAME_HDRS) tools/cuda_compat/math.h
 	$(NVCC) -std=c++17 -O2 -arch=$(CUDA_ARCH) $(NVCCBIN) -Itools/cuda_compat -Icuda \
 	        -o $@ $(CUDA_GAME_SRCS) -Xcompiler "-Wall -Wextra -fopenmp" -lgomp
 
+# Porte HIP da versao CUDA, para GPU da AMD. Mesmo algoritmo e mesma saida: o
+# CSV de GameC_rocm tem de bater com o de GameC_cuda linha a linha.
+#
+# O -x hip existe porque nem toda versao do hipcc reconhece a extensao .hip
+# sozinha; dizer a linguagem na linha de comando funciona em todas.
+#
+# O -fopenmp nao e para o laco de agentes, que e da GPU: e para ler os mapas em
+# paralelo. Aqui ele vai direto na linha, e nao dentro de -Xcompiler, porque o
+# hipcc E o compilador do host - nao ha um segundo compilador atras dele como
+# no nvcc.
+ROCM_GAME_SRCS = rocm/main.hip rocm/simulation.hip rocm/game.hip
+ROCM_GAME_HDRS = rocm/simulation.h rocm/game.h rocm/enums.h rocm/constants.h rocm/rng.h
+
+GameC_rocm: $(ROCM_GAME_SRCS) $(ROCM_GAME_HDRS)
+	$(HIPCC) -std=c++17 -O2 --offload-arch=$(ROCM_ARCH) -Irocm -x hip \
+	        -o $@ $(ROCM_GAME_SRCS) -Wall -Wextra -fopenmp
+
 genGraph_cuda: tools/genGraph.cu tools/cuda_compat/math.h
 	$(NVCC) -std=c++17 -O2 -arch=$(CUDA_ARCH) $(NVCCBIN) -Itools/cuda_compat \
 	        -o $@ tools/genGraph.cu -Xcompiler "-Wall -Wextra"
@@ -162,7 +262,15 @@ ifdef HAVE_METAL
 endif
 
 clean:
-	rm -f GameC GameC_omp GameC_metal GameC_cuda kernels.metallib runTests runTests_omp \
-	      $(GENERATOR) genGraph_mpi genGraph_cuda base/*.o openmp/*.o metal/*.air cuda/*.o
+	rm -f GameC GameC_omp GameC_omp_games GameC_omp_nested GameC_metal GameC_cuda GameC_rocm \
+	      kernels.metallib runTests runTests_omp \
+	      $(GENERATOR) GameC_mpi genGraph_mpi genGraph_cuda base/*.o openmp/*.o metal/*.air cuda/*.o rocm/*.o
 
-.PHONY: all run test golden clean
+.PHONY: all run test golden golden-omp omp-variants clean
+
+# As tres variantes de OpenMP tem de dar a MESMA saida entre si e a da base.
+# Onde as threads entram nao pode mudar resultado; se mudar, ha race.
+golden-omp: GameC GameC_omp GameC_omp_games GameC_omp_nested
+	./scripts/check_golden.sh ./GameC_omp
+	./scripts/check_golden.sh ./GameC_omp_games
+	./scripts/check_golden.sh ./GameC_omp_nested
