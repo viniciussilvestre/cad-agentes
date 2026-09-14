@@ -120,19 +120,34 @@ class Game
         // turno do outro lado.
         void step(int turn);
 
-        // Anota a saida do agente no outbox e libera o slot de origem. Nao
-        // escreve no jogo de destino: isso acontece na barreira, em
-        // acceptArrival.
+        // Move o agente para outro jogo.
+        //
+        // DESTINO NO MESMO RANK: caminho identico ao da versao OpenMP -
+        // escrita direta na lista do destino, recusa se ela estiver cheia, e
+        // visibilidade imediata (se o destino ainda nao andou neste turno, o
+        // agente anda de novo la). E o que faz `mpirun -n 1` reproduzir a
+        // sequencial byte a byte.
+        //
+        // DESTINO EM OUTRO RANK: vira mensagem, aplicada na barreira entre
+        // turnos. Ai nao ha como haver turno duplo nem recusa - e a diferenca
+        // irredutivel entre um rank e varios.
         void travel(int id, int memberIndex, AgentRng& rng);
+
+        // Reserva um slot no fim da lista deste jogo. Devolve -1 se encheu, e
+        // ai a viagem local e recusada e o agente fica onde esta.
+        int claimMemberSlot();
 
         // Poe um agente que chegou na lista deste jogo.
         //
         // SO PODE SER CHAMADO NA BARREIRA entre turnos, com ninguem percorrendo
-        // a lista - e por isso que aqui a lista pode crescer, coisa que a versao
-        // sequencial nao pode fazer. La um jogo escreve na lista de outro
-        // enquanto o dono a percorre, entao a capacidade e fixa e o pior caso e
-        // uma viagem recusada por lotacao. Aqui nao ha corrida, entao nao ha
-        // recusa: nenhum agente e perdido por falta de espaco.
+        // a lista - e por isso que aqui ela pode crescer.
+        //
+        // Crescer, e nao recusar, porque o agente ja saiu da origem quando a
+        // mensagem partiu: recusar aqui o perderia, e a conservacao acusaria.
+        // Devolve-lo exigiria uma segunda rodada de mensagens. Na pratica a
+        // lista nunca enche - as populacoes oscilam em torno da media e a
+        // capacidade nasce com 50% de folga - entao este caminho e a rede de
+        // seguranca, nao o caso comum.
         void acceptArrival(const Departure& arrival);
 
         // Tira os -1 deixados por quem viajou. Roda entre turnos, quando

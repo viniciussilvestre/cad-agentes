@@ -582,6 +582,29 @@ void Game::travel(int id, int memberIndex, AgentRng& rng)
     // destino pode ser de outro rank, e ai o mapa dele nunca foi lido aqui.
     int landing = (int) rng.below((uint32_t) nodeCountOf[destinationIndex]);
 
+    // Destino no mesmo rank: exatamente o que a versao OpenMP faz.
+    if (gameOwner[destinationIndex] == myRank)
+    {
+        Game& destination = (*world)[destinationIndex];
+
+        // Reserva o slot no destino ANTES de sair daqui. Se a lista de la
+        // estiver cheia, a viagem e recusada e o agente fica onde esta.
+        int slot = destination.claimMemberSlot();
+        if (slot < 0)
+        {
+            return;
+        }
+
+        destination.members[slot] = id;
+        pool->positions[id] = landing;
+        pool->travelLock[id] = (unsigned char) Constants::TRAVEL_LOCK_TURNS;
+
+        // So agora o slot de origem e liberado. Nesta ordem o agente existe nos
+        // dois lugares por um instante, e nunca em nenhum.
+        members[memberIndex] = -1;
+        return;
+    }
+
     Departure departure;
     departure.id = id;
     departure.destinationGame = destinationIndex;
@@ -596,6 +619,17 @@ void Game::travel(int id, int memberIndex, AgentRng& rng)
     // Entre um e outro ele existe apenas no outbox - por isso a conferencia de
     // conservacao acontece DEPOIS da troca, nunca no meio do turno.
     members[memberIndex] = -1;
+}
+
+int Game::claimMemberSlot()
+{
+    if (memberCount >= (int) members.size())
+    {
+        return -1;
+    }
+    int slot = memberCount;
+    memberCount++;
+    return slot;
 }
 
 void Game::acceptArrival(const Departure& arrival)

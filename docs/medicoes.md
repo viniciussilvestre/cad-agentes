@@ -160,44 +160,61 @@ os agentes de cada um, que e outra decomposicao.
 
 **mac** (10 nucleos logicos), 8 jogos, 880 mil agentes, 100 turnos, melhor de 3:
 
-| unidades | omp-jogos | mpi | mpi / omp |
-|---|---|---|---|
-| 1 | 3,242 s | 3,237 s | 1,00 |
-| 2 | 1,802 s | 1,874 s | 1,04 |
-| 4 | 1,002 s | 1,020 s | 1,02 |
-| 8 | 0,602 s | 0,637 s | 1,06 |
+| unidades | omp-jogos | mpi |
+|---|---|---|
+| 1 | 3,258 s | 3,261 s |
+| 2 | 1,809 s | 1,870 s |
+| 4 | 1,024 s | 1,081 s |
+| 8 | 0,731 s | 0,725 s |
 
-Sequencial de referencia: 3,191 s.
+Sequencial de referencia: 3,226 s.
 
-**A mensagem custa de 2% a 6%.** Muito menos que no gerador (secao 8, onde o
-MPI perdia 79%), e a razao e o que se comunica: com TRAVEL_RATE de 1%, sao
-~8.800 viajantes por turno a 16 bytes = 141 KB por turno em toda a malha, um
-`Alltoallv` so. Em 100 turnos, 14 MB no total. O `mpirun` paga criacao de
-processo uma vez e amortiza ao longo da corrida, enquanto no gerador a corrida
-inteira durava segundos.
+**A mensagem custa de 0% a 6%.** Muito menos que no gerador (secao 8, onde o
+MPI perdia 79%), e a razao e o que se comunica: com TRAVEL_RATE de 1% e 8
+ranks, sao ~7.700 viajantes cruzando rank por turno a 16 bytes = 123 KB por
+turno, um `Alltoallv` so. O `mpirun` paga criacao de processo uma vez e
+amortiza ao longo da corrida, enquanto no gerador a corrida inteira durava
+segundos.
 
-### O que o MPI ganha de quebra
+### Paridade com o OpenMP
 
-**Determinismo.** A secao 7 registra que a versao OpenMP com varios jogos e
-varias threads diverge da sequencial, porque quem faz turno duplo depende do
-escalonamento. No MPI isso nao existe: as chegadas sao aplicadas na barreira
-entre turnos, entao nao ha "jogo que ainda nao andou". Conferido - `-n 1`,
-`-n 2`, `-n 4` e `-n 8` dao saida **identica**, e com `--games 1` a saida bate
-byte a byte com a do `GameC`.
+O MPI segue o caminho do OpenMP sempre que pode. Viagem cujo destino esta no
+MESMO rank e escrita direta na lista do destino, com recusa por lotacao e
+visibilidade imediata - identica a sequencial, inclusive no turno duplo. So o
+que cruza rank vira mensagem aplicada na barreira entre turnos.
 
-O preco disso e que a versao MPI difere da sequencial quando ha varios jogos,
-pela ausencia do turno duplo - do mesmo jeito que a Metal e a CUDA.
+Consequencia: **`mpirun -n 1` reproduz a sequencial byte a byte**, mesmo com
+varios jogos. Conferido com 8 jogos, 220 mil agentes, 80 turnos.
 
-**Memoria de mapa.** Cada rank carrega so os mapas dos jogos que possui. E o
-motivo real para usar MPI aqui: com 28 jogos e 4 nos, cada maquina segura sete
-grafos em vez de 28.
+A diferenca que sobra cresce com a fracao de viagem que cruza rank, que e
+(R-1)/R:
+
+| ranks | viagem remota | diferenca contra a sequencial |
+|---|---|---|
+| 1 | 0% | **0,000%** |
+| 2 | 50% | 0,109% |
+| 4 | 75% | 0,149% |
+| 8 | 88% | 0,199% |
+
+Conservacao exata em todas as contagens de rank.
+
+Essa diferenca e irredutivel sem serializar o laco de jogos. O viajante remoto
+sai da origem quando a mensagem parte, entao nao ha como recusa-lo por lotacao
+no destino sem perde-lo ou sem uma segunda rodada de mensagens; e nao ha como
+ele andar de novo num jogo que ja andou noutro rank sem que os ranks esperem uns
+pelos outros em ordem de indice - o que anularia a decomposicao.
+
+### Memoria de mapa
+
+Cada rank carrega so os mapas dos jogos que possui. E o motivo real para usar
+MPI aqui: com 28 jogos e 4 nos, cada maquina segura sete grafos em vez de 28.
 
 ### Teto
 
 O paralelismo do MPI para no numero de jogos: o laco de agentes de um jogo nao
 e dividido entre ranks. Dividi-lo exigiria replicar `infectedAtNode` e reduzi-lo
 todo turno - com mapas de 1M nos sao 125 KB por jogo por turno como bitmask,
-tolerave; com os de 100M nos sao 12,5 MB, e ai o coletivo passa a custar mais
+toleravel; com os de 100M nos sao 12,5 MB, e ai o coletivo passa a custar mais
 que o trabalho que economiza.
 
 ## 6. Multiplos ambientes: onde colocar o OpenMP
