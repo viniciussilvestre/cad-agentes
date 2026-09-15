@@ -375,6 +375,27 @@ def summary(samples):
                     print(f"  {style_of(version)[2]:<19}"
                           f"{statistics.fmean(reference) / statistics.fmean(values):>8.1f}x")
 
+        # Speedup absoluto: soma dos tempos da base dividida pela soma dos
+        # tempos da versao, sobre os pontos que as duas mediram. E a razao de
+        # dois tempos totais, nao a media de varias razoes - assim um ponto
+        # grande pesa mais que um pequeno, que e o que interessa quando se
+        # pergunta quanto a versao economizou na varredura inteira.
+        baseline = {a: statistics.fmean(vs) for a, vs in perVersion["base"].items()}
+        print("\nspeedup absoluto (tempo total somado sobre a varredura):")
+        for version in order:
+            if version == "base":
+                continue
+            shared = [a for a in sorted(perVersion[version]) if a in baseline]
+            if not shared:
+                continue
+            baseTotal = sum(baseline[a] for a in shared)
+            versionTotal = sum(statistics.fmean(perVersion[version][a])
+                               for a in shared)
+            if versionTotal > 0:
+                print(f"  {style_of(version)[2]:<19}"
+                      f"{baseTotal / versionTotal:>8.2f}x"
+                      f"   ({len(shared)} pontos)")
+
 
 def main():
     if len(sys.argv) != 2:
