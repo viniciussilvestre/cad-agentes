@@ -128,7 +128,6 @@ void agentTurn(int id, const vector<int>& neighbors, int numberOfNodes,
                vector<int>& positions, vector<States>& states,
                vector<unsigned char>& counters, AgentRng& rng)
 {
-    // DEAD e terminal: nao se move, nao transmite, nao transiciona.
     if (states[id] == States::DEAD)
     {
         return;
@@ -136,8 +135,6 @@ void agentTurn(int id, const vector<int>& neighbors, int numberOfNodes,
 
     updatePosition(id, neighbors, numberOfNodes, positions, rng);
 
-    // Cada agente executa no maximo uma transicao por turno: se checkSurroundings
-    // acabou de expor o agente, ele nao avanca a incubacao no mesmo turno.
     States previousState = states[id];
     checkSurroundings(id, infectedAtNode, positions, states, counters);
     if (states[id] != previousState)

@@ -207,9 +207,6 @@ __global__ void stepKernel(int* positions, unsigned char* states,
     {
         int id = (int) index;
         States state = (States) states[id];
-
-        // DEAD e terminal: nao se move, nao transmite, nao transiciona, nao
-        // viaja. O early return tambem economiza os sorteios.
         if (state == States::DEAD)
         {
             continue;
@@ -223,17 +220,10 @@ __global__ void stepKernel(int* positions, unsigned char* states,
         rng.seed = seedFor(seeds[game], id, turn);
         rng.index = 0;
 
-        // Grau fixo: todo no tem exatamente SLOTS slots e os vazios apontam
-        // para o proprio no. Sorteia-se um slot e pronto - sem laco de
-        // rejeicao, sem checagem de limites, sem branch, o que na GPU quer
-        // dizer sem divergencia de warp.
         int slot = (int) rng.below(Constants::SLOTS);
         int position = neighbors[(long long) offset * Constants::SLOTS + (long long) slot * nodes + positions[id]];
         positions[id] = position;
 
-        // Contato. Cada agente faz no maximo uma transicao por turno: quem
-        // acaba de ser exposto nao avanca a incubacao no mesmo turno, e por
-        // isso sai daqui sem gastar o segundo sorteio.
         if (state == States::SUSCEPTIBLE || state == States::RECOVERED)
         {
             long long node = (long long) offset + position;
@@ -246,13 +236,8 @@ __global__ void stepKernel(int* positions, unsigned char* states,
         }
         else if (state == States::EXPOSED || state == States::INFECTED)
         {
-            // O contador mede turnos NO ESTADO ATUAL e zera em toda transicao.
-            // Nunca passa de EXPOSED_TIME, entao cabe num byte.
             unsigned char counter = (unsigned char) (counters[id] + 1);
 
-            // Sorteio como inteiro de 32 bits contra o limiar equivalente a
-            // taxa. Sem double no laco: contracao FMA daria resultados
-            // diferentes em CPU e GPU para a mesma conta.
             uint32_t probability = rng.next();
 
             if (state == States::EXPOSED)
@@ -264,7 +249,6 @@ __global__ void stepKernel(int* positions, unsigned char* states,
                 }
                 else if (counter == Constants::EXPOSED_TIME)
                 {
-                    // A janela fechou sem a infeccao pegar: volta a suscetivel.
                     states[id] = (unsigned char) States::SUSCEPTIBLE;
                     counters[id] = 0;
                 }
@@ -275,9 +259,6 @@ __global__ void stepKernel(int* positions, unsigned char* states,
             }
             else
             {
-                // INFECTED. A ordem importa: sem sair aqui depois da morte,
-                // quem morre no ultimo turno da janela cairia no ramo de
-                // RECOVERED e voltaria a vida.
                 if (probability < Constants::MORTALITY_THRESHOLD)
                 {
                     states[id] = (unsigned char) States::DEAD;
@@ -295,11 +276,6 @@ __global__ void stepKernel(int* positions, unsigned char* states,
                 }
             }
         }
-
-        // Viagem entre jogos, depois do turno normal. Os sorteios comecam no
-        // indice 2 porque o passeio consome o 0 e a transicao as vezes o 1 -
-        // fixar o indice faz a viagem nao depender do caminho que o agente
-        // tomou acima.
         if (numberOfGames > 1)
         {
             if (travelLock[id] > 0)
@@ -311,15 +287,11 @@ __global__ void stepKernel(int* positions, unsigned char* states,
                 rng.index = 2;
                 if (rng.next() < Constants::TRAVEL_THRESHOLD)
                 {
-                    // Sorteia entre os OUTROS jogos: tira este do baralho e
-                    // desloca, em vez de sortear e repetir se cair em si mesmo.
                     int destination = (int) rng.below((uint32_t) (numberOfGames - 1));
                     if (destination >= game)
                     {
                         destination++;
                     }
-                    // O destino tem o proprio mapa, entao a posicao antiga nao
-                    // vale la: o agente chega num no sorteado do grafo novo.
                     positions[id] = (int) rng.below((uint32_t) nodeCount[destination]);
                     gameOf[id] = (unsigned char) destination;
                     travelLock[id] = (unsigned char) Constants::TRAVEL_LOCK_TURNS;
