@@ -3,6 +3,9 @@
 # binarios e objetos gerados pelo Makefile
 GameC
 GameC_omp
+GameC_omp_games
+GameC_omp_nested
+GameC_mpi
 GameC_metal
 GameC_cuda
 GameC_rocm
