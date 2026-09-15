@@ -5,6 +5,7 @@ GameC
 GameC_omp
 GameC_metal
 GameC_cuda
+GameC_rocm
 runTests
 runTests_omp
 kernels.metallib
@@ -18,3 +19,6 @@ map_*.txt
 # saida do cmake
 cmake-build-debug/
 build/
+
+# saida das varreduras de desempenho
+bench/

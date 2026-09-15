@@ -19,6 +19,15 @@ Simulation::Simulation(int numberOfGames, int healthy, int infected)
     games.resize((size_t) numberOfGames);
     mapFiles.assign((size_t) numberOfGames, "A1100a.txt");
     setSeed(Constants::DEFAULT_SEED);
+
+    // So a variante PAR_NESTED quer dois niveis ativos. Nas outras duas o
+    // segundo nivel nao existe, e deixar o aninhamento ligado a toa so daria
+    // ao libgomp permissao para criar threads que ninguem pediu.
+#if defined(PAR_NESTED)
+    setNestedParallelism(true);
+#else
+    setNestedParallelism(false);
+#endif
 }
 
 void Simulation::setNestedParallelism(bool enabled)
@@ -125,11 +134,22 @@ void Simulation::start()
     }
 }
 
+// ONDE FICA O PARALELISMO - escolhido na compilacao, tres binarios do mesmo
+// fonte (ver Makefile):
+//
+//   padrao       agentes. Jogos em serie, o laco de dentro de Game::step em
+//                paralelo. Uma barreira por jogo por turno.
+//   PAR_GAMES    jogos. Este laco em paralelo, os de dentro em serie. Uma
+//                barreira por turno, mas a divisao so tem tantas partes quantos
+//                forem os jogos - com menos jogos que threads, sobra thread
+//                parada.
+//   PAR_NESTED   os dois, com omp_set_max_active_levels(2).
+//
+// A escolha e por macro, e nao por flag em tempo de execucao, justamente por
+// causa da armadilha descrita abaixo: uma clausula if() nao desliga a regiao
+// paralela, so a esvazia.
 void Simulation::step()
 {
-    // Dois niveis de paralelismo: os ambientes aqui, os agentes de cada um
-    // dentro de Game::step.
-    //
     // O caso de um jogo so desvia ANTES do pragma, e nao com uma clausula
     // if(): uma regiao paralela com if falso ainda e uma regiao paralela, e as
     // regioes de dentro de Game::step passam a ser aninhadas. O libgomp so
@@ -144,6 +164,13 @@ void Simulation::step()
     }
     else
     {
+        // schedule(dynamic) porque os jogos nao custam igual: a viagem move
+        // agentes entre eles, entao as listas de presentes divergem ao longo da
+        // corrida e uma divisao estatica deixaria threads esperando a mais
+        // cheia.
+#if defined(PAR_GAMES) || defined(PAR_NESTED)
+        #pragma omp parallel for schedule(dynamic)
+#endif
         for (int index = 0; index < numberOfGames; index++)
         {
             games[index].step(turns);

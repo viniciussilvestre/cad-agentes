@@ -457,7 +457,12 @@ void Game::buildInfectedAtNode()
     // Varre so quem esta NESTE jogo. DEAD nunca e INFECTED, entao nao transmite
     // nem conta como contato.
     int numberOfMembers = memberCount;
+    // Com PAR_GAMES quem roda em paralelo sao os JOGOS (ver Simulation::step), e
+    // este laco precisa ser serial: os dois ao mesmo tempo sao PAR_NESTED, que e
+    // a terceira variante e nao o padrao.
+#if !defined(PAR_GAMES)
     #pragma omp parallel for schedule(static)
+#endif
     for (int index = 0; index < numberOfMembers; index++)
     {
         int id = members[index];
@@ -523,7 +528,10 @@ void Game::step(int turn)
     // que e o comportamento desejado: o agente ja andou uma vez neste turno,
     // no jogo de origem, e processa-lo de novo aqui seria um turno duplo.
     int numberOfMembers = memberCount;
+    // Serial sob PAR_GAMES, pelo mesmo motivo de buildInfectedAtNode.
+#if !defined(PAR_GAMES)
     #pragma omp parallel for
+#endif
     for (int index = 0; index < numberOfMembers; index++)
     {
         int id = members[index];

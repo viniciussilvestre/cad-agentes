@@ -1,0 +1,181 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720"
+     role="img"
+     aria-label="Fluxograma da versão base: início, ler argumentos, criar a simulação, ler os mapas, semear os agentes, turno igual a zero; enquanto turno menor que 600, para cada jogo monta infectedAtNode e para cada agente decide se está morto, move, verifica contato, aplica a transição de estado e decide se viaja; ao fim do turno compacta members e incrementa o turno; ao terminar, conta os estados, imprime o CSV e encerra.">
+
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9.4" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#c5d2e0"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1280" height="720" fill="#4b6079"/>
+
+  <text x="40" y="30" font-family="Archivo, Lato, sans-serif" font-size="19" font-weight="700" fill="#f4f7fa">Fluxograma &#8212; versão base</text>
+
+  <g stroke="#c5d2e0" stroke-width="1.6" fill="none" marker-end="url(#ar)">
+    <path d="M220 84 L220 100"/>
+    <path d="M220 142 L220 160"/>
+    <path d="M220 210 L220 228"/>
+    <path d="M220 278 L220 296"/>
+    <path d="M220 346 L220 360"/>
+    <path d="M220 398 L220 410"/>
+    <path d="M220 492 L220 510"/>
+    <path d="M220 550 L220 570"/>
+    <path d="M220 610 L220 630"/>
+    <path d="M332 452 L380 452 L380 86 L494 86"/>
+    <path d="M620 110 L620 132"/>
+    <path d="M620 182 L620 204"/>
+    <path d="M620 254 L620 278 L800 278 L800 100 L834 100"/>
+    <path d="M620 444 L620 466"/>
+    <path d="M620 512 L620 534"/>
+    <path d="M620 584 L620 606"/>
+    <path d="M500 422 L482 422 L482 230 L494 230"/>
+    <path d="M500 490 L464 490 L464 86 L494 86"/>
+    <path d="M620 648 L620 662"/>
+    <path d="M74 452 L106 452"/>
+    <path d="M960 138 L960 160"/>
+    <path d="M960 206 L960 226"/>
+    <path d="M960 316 L960 338"/>
+    <path d="M960 424 L960 446"/>
+    <path d="M960 450 L960 458"/>
+    <path d="M1080 272 L1098 272"/>
+    <path d="M1080 382 L1098 382"/>
+    <path d="M1080 504 L1098 504"/>
+    <path d="M790 596 L790 422 L742 422"/>
+  </g>
+
+  <!-- ligações sem ponta de seta -->
+  <g stroke="#c5d2e0" stroke-width="1.6" fill="none">
+    <path d="M1080 100 L1232 100 L1232 596"/>
+    <path d="M1157 294 L1157 320 L1090 320 L1090 448 L960 448"/>
+    <path d="M1147 408 L1147 448 L960 448"/>
+    <path d="M1157 526 L1157 596"/>
+    <path d="M960 548 L960 596"/>
+    <path d="M1232 596 L790 596"/>
+  </g>
+
+  <!-- ================= coluna A ================= -->
+  <g font-family="Archivo, Lato, sans-serif" text-anchor="middle">
+    <rect x="145" y="50" width="150" height="34" rx="17" fill="#57708c" stroke="#c5d2e0" stroke-width="1.6"/>
+    <text x="220" y="72" font-size="14" font-weight="600" fill="#f4f7fa">INÍCIO</text>
+
+    <rect x="90" y="100" width="260" height="42" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <text x="220" y="126" font-size="13" fill="#f4f7fa">Ler argumentos</text>
+
+    <rect x="90" y="160" width="260" height="50" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <text x="220" y="182" font-size="13" fill="#f4f7fa">Criar Simulation</text>
+    <text x="220" y="200" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">20 jogos, 22.000.000 agentes</text>
+
+    <rect x="90" y="228" width="260" height="50" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <text x="220" y="250" font-size="13" fill="#f4f7fa">Ler os 20 mapas</text>
+    <text x="220" y="268" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">6 slots de vizinho por nó</text>
+
+    <rect x="90" y="296" width="260" height="50" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <text x="220" y="318" font-size="13" fill="#f4f7fa">Semear os agentes</text>
+    <text x="220" y="336" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">posição sorteada, estado inicial</text>
+
+    <rect x="90" y="360" width="260" height="38" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <text x="220" y="384" font-size="13" fill="#f4f7fa">turno &#8592; 0</text>
+
+    <polygon points="220,412 332,452 220,492 108,452" fill="#4b6079" stroke="#f2bd58" stroke-width="1.8"/>
+    <text x="220" y="457" font-size="13" fill="#f4f7fa">turno &lt; 600 ?</text>
+
+    <rect x="90" y="510" width="260" height="40" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <text x="220" y="535" font-size="13" fill="#f4f7fa">Contar estados por jogo</text>
+
+    <polygon points="112,570 350,570 328,610 90,610" fill="#57708c" stroke="#7d94ad"/>
+    <text x="220" y="595" font-size="13" fill="#f4f7fa">Imprimir CSV</text>
+
+    <rect x="145" y="630" width="150" height="34" rx="17" fill="#57708c" stroke="#c5d2e0" stroke-width="1.6"/>
+    <text x="220" y="652" font-size="14" font-weight="600" fill="#f4f7fa">FIM</text>
+
+    <circle cx="60" cy="452" r="14" fill="#4b6079" stroke="#c5d2e0" stroke-width="1.6"/>
+    <text x="60" y="457" font-size="13" font-weight="600" fill="#f4f7fa">A</text>
+  </g>
+
+  <!-- ================= coluna B ================= -->
+  <g font-family="Archivo, Lato, sans-serif" text-anchor="middle">
+    <polygon points="516,62 724,62 740,86 724,110 516,110 500,86" fill="#57708c" stroke="#6ad6b1" stroke-width="1.6"/>
+    <text x="620" y="82" font-size="13" fill="#f4f7fa">para cada jogo</text>
+    <text x="620" y="100" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">0 .. 19</text>
+
+    <rect x="500" y="132" width="240" height="50" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <text x="620" y="154" font-size="13" fill="#f4f7fa">Montar infectedAtNode</text>
+    <text x="620" y="172" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">nós com algum INFECTADO</text>
+
+    <polygon points="516,206 724,206 740,230 724,254 516,254 500,230" fill="#57708c" stroke="#6ad6b1" stroke-width="1.6"/>
+    <text x="620" y="226" font-size="13" fill="#f4f7fa">para cada agente</text>
+    <text x="620" y="244" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">em members[]</text>
+
+    <rect x="500" y="400" width="240" height="44" rx="2" fill="#4b6079" stroke="#6ad6b1" stroke-width="1.6"/>
+    <text x="620" y="420" font-size="13" fill="#f4f7fa">fim do laço</text>
+    <text x="620" y="437" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">próximo agente</text>
+
+    <rect x="500" y="466" width="240" height="44" rx="2" fill="#4b6079" stroke="#6ad6b1" stroke-width="1.6"/>
+    <text x="620" y="486" font-size="13" fill="#f4f7fa">fim do laço</text>
+    <text x="620" y="503" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">próximo jogo</text>
+
+    <rect x="500" y="534" width="240" height="50" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <text x="620" y="556" font-size="13" fill="#f4f7fa">Compactar members</text>
+    <text x="620" y="574" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">de todos os jogos</text>
+
+    <rect x="500" y="606" width="240" height="42" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <text x="620" y="632" font-size="13" fill="#f4f7fa">turno &#8592; turno + 1</text>
+
+    <circle cx="620" cy="676" r="14" fill="#4b6079" stroke="#c5d2e0" stroke-width="1.6"/>
+    <text x="620" y="681" font-size="13" font-weight="600" fill="#f4f7fa">A</text>
+  </g>
+
+  <!-- ================= coluna C ================= -->
+  <g font-family="Archivo, Lato, sans-serif" text-anchor="middle">
+    <polygon points="960,62 1080,100 960,138 840,100" fill="#4b6079" stroke="#f2bd58" stroke-width="1.8"/>
+    <text x="960" y="105" font-size="13" fill="#f4f7fa">estado = MORTO ?</text>
+
+    <rect x="840" y="160" width="240" height="46" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <text x="960" y="180" font-size="13" fill="#f4f7fa">Mover</text>
+    <text x="960" y="198" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">sortear 1 dos 6 slots</text>
+
+    <polygon points="960,226 1080,272 960,316 840,272" fill="#4b6079" stroke="#f2bd58" stroke-width="1.8"/>
+    <text x="960" y="267" font-size="11.5" fill="#f4f7fa">S ou R em nó</text>
+    <text x="960" y="284" font-size="11.5" fill="#f4f7fa">com INFECTADO ?</text>
+
+    <rect x="1100" y="250" width="115" height="44" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <text x="1157" y="270" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#f4f7fa">estado &#8592;</text>
+    <text x="1157" y="285" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#f4f7fa">EXPOSTO</text>
+
+    <polygon points="960,338 1080,382 960,424 840,382" fill="#4b6079" stroke="#f2bd58" stroke-width="1.8"/>
+    <text x="960" y="377" font-size="11.5" fill="#f4f7fa">estado = EXPOSTO</text>
+    <text x="960" y="394" font-size="11.5" fill="#f4f7fa">ou INFECTADO ?</text>
+
+    <rect x="1100" y="358" width="95" height="50" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <line x1="1108" y1="358" x2="1108" y2="408" stroke="#7d94ad" stroke-width="1.2"/>
+    <line x1="1187" y1="358" x2="1187" y2="408" stroke="#7d94ad" stroke-width="1.2"/>
+    <text x="1147" y="378" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#f4f7fa">Transição</text>
+    <text x="1147" y="394" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#f4f7fa">de estado</text>
+
+    <circle cx="960" cy="448" r="4" fill="#c5d2e0"/>
+
+    <polygon points="960,460 1080,504 960,548 840,504" fill="#4b6079" stroke="#f2bd58" stroke-width="1.8"/>
+    <text x="960" y="499" font-size="11.5" fill="#f4f7fa">travelLock = 0 e</text>
+    <text x="960" y="516" font-size="11.5" fill="#f4f7fa">sorteio &lt; 1% ?</text>
+
+    <rect x="1100" y="482" width="115" height="44" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <text x="1157" y="502" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#f4f7fa">Viajar:</text>
+    <text x="1157" y="517" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#f4f7fa">novo jogo e nó</text>
+  </g>
+
+  <!-- ================= rótulos sim / não ================= -->
+  <g font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" font-size="11" fill="#c5d2e0">
+    <text x="344" y="444">sim</text>
+    <text x="232" y="508">não</text>
+    <text x="1092" y="92">sim</text>
+    <text x="972" y="156">não</text>
+    <text x="1090" y="266" font-size="10" text-anchor="middle">sim</text>
+    <text x="972" y="334">não</text>
+    <text x="1090" y="376" font-size="10" text-anchor="middle">sim</text>
+    <text x="972" y="442">não</text>
+    <text x="1090" y="498" font-size="10" text-anchor="middle">sim</text>
+    <text x="972" y="570">não</text>
+  </g>
+</svg>

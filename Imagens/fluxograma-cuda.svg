@@ -1,0 +1,160 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720"
+     role="img"
+     aria-label="Fluxograma da versão CUDA: início, ler argumentos, criar a simulação, prescanMaps, cudaMalloc; para cada jogo faz o parse do mapa, o stagedUpload e o fillSelfLoopsKernel; depois uploadMetadata, seedAgentsKernel e turno igual a zero; enquanto turno menor que 600, zera a máscara com cudaMemsetAsync, roda markInfectedKernel e stepKernel e incrementa o turno; ao terminar, countKernel, cópia das contagens para o host, imprime o CSV e encerra.">
+
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9.4" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#c5d2e0"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1280" height="720" fill="#4b6079"/>
+
+  <text x="40" y="30" font-family="Archivo, Lato, sans-serif" font-size="19" font-weight="700" fill="#f4f7fa">Fluxograma &#8212; versão CUDA</text>
+
+  <g font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" font-size="11">
+    <rect x="1060" y="20" width="10" height="10" fill="#6ad6b1"/>
+    <text x="1076" y="29" fill="#c5d2e0">kernel na GPU</text>
+    <rect x="1180" y="20" width="10" height="10" fill="#f2bd58"/>
+    <text x="1196" y="29" fill="#c5d2e0">host</text>
+  </g>
+
+  <g stroke="#c5d2e0" stroke-width="1.6" fill="none" marker-end="url(#ar)">
+    <path d="M220 84 L220 100"/>
+    <path d="M220 142 L220 160"/>
+    <path d="M220 210 L220 228"/>
+    <path d="M220 278 L220 296"/>
+    <path d="M220 346 L220 366 L380 366 L380 86 L494 86"/>
+    <path d="M620 110 L620 132"/>
+    <path d="M620 182 L620 204"/>
+    <path d="M620 254 L620 276"/>
+    <path d="M620 326 L620 348"/>
+    <path d="M620 392 L620 414"/>
+    <path d="M620 464 L620 486"/>
+    <path d="M620 536 L620 558"/>
+    <path d="M500 370 L470 370 L470 86 L494 86"/>
+    <path d="M620 596 L620 618 L420 618 L420 404 L220 404 L220 410"/>
+    <path d="M220 492 L220 512"/>
+    <path d="M220 552 L220 572"/>
+    <path d="M220 612 L220 632"/>
+    <path d="M220 670 L220 686"/>
+    <path d="M332 452 L374 452"/>
+    <path d="M960 58 L960 70"/>
+    <path d="M960 134 L960 158"/>
+    <path d="M960 206 L960 230"/>
+    <path d="M960 286 L960 310"/>
+    <path d="M960 362 L960 380"/>
+    <path d="M74 452 L106 452"/>
+  </g>
+
+  <!-- ================= coluna A ================= -->
+  <g font-family="Archivo, Lato, sans-serif" text-anchor="middle">
+    <rect x="145" y="50" width="150" height="34" rx="17" fill="#57708c" stroke="#c5d2e0" stroke-width="1.6"/>
+    <text x="220" y="72" font-size="14" font-weight="600" fill="#f4f7fa">INÍCIO</text>
+
+    <rect x="90" y="100" width="260" height="42" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <text x="220" y="126" font-size="13" fill="#f4f7fa">Ler argumentos</text>
+
+    <rect x="90" y="160" width="260" height="50" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <text x="220" y="182" font-size="13" fill="#f4f7fa">Criar Simulation</text>
+    <text x="220" y="200" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">20 jogos, 22.000.000 agentes</text>
+
+    <rect x="90" y="228" width="260" height="50" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <text x="220" y="250" font-size="13" fill="#f4f7fa">prescanMaps</text>
+    <text x="220" y="268" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">ler só os cabeçalhos</text>
+
+    <rect x="90" y="296" width="260" height="50" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <text x="220" y="318" font-size="13" fill="#f4f7fa">cudaMalloc</text>
+    <text x="220" y="336" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">mapas + máscara no device</text>
+
+    <polygon points="220,412 332,452 220,492 108,452" fill="#4b6079" stroke="#f2bd58" stroke-width="1.8"/>
+    <text x="220" y="457" font-size="13" fill="#f4f7fa">turno &lt; 600 ?</text>
+
+    <rect x="90" y="512" width="260" height="40" rx="2" fill="#57708c" stroke="#6ad6b1" stroke-width="1.6"/>
+    <text x="220" y="537" font-size="13" fill="#f4f7fa">countKernel</text>
+
+    <rect x="90" y="572" width="260" height="40" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <text x="220" y="597" font-size="12.5" fill="#f4f7fa">Copiar contagens para o host</text>
+
+    <polygon points="112,632 350,632 328,670 90,670" fill="#57708c" stroke="#7d94ad"/>
+    <text x="220" y="656" font-size="13" fill="#f4f7fa">Imprimir CSV</text>
+
+    <rect x="145" y="686" width="150" height="32" rx="16" fill="#57708c" stroke="#c5d2e0" stroke-width="1.6"/>
+    <text x="220" y="707" font-size="13" font-weight="600" fill="#f4f7fa">FIM</text>
+
+    <circle cx="60" cy="452" r="14" fill="#4b6079" stroke="#c5d2e0" stroke-width="1.6"/>
+    <text x="60" y="457" font-size="13" font-weight="600" fill="#f4f7fa">A</text>
+
+    <circle cx="390" cy="452" r="14" fill="#4b6079" stroke="#c5d2e0" stroke-width="1.6"/>
+    <text x="390" y="457" font-size="13" font-weight="600" fill="#f4f7fa">B</text>
+  </g>
+
+  <!-- ================= coluna B: leitura e subida dos mapas ================= -->
+  <g font-family="Archivo, Lato, sans-serif" text-anchor="middle">
+    <polygon points="516,62 724,62 740,86 724,110 516,110 500,86" fill="#57708c" stroke="#f2bd58" stroke-width="1.8"/>
+    <text x="620" y="82" font-size="13" fill="#f4f7fa">para cada jogo</text>
+    <text x="620" y="100" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">0 .. 19</text>
+
+    <rect x="500" y="132" width="240" height="50" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <text x="620" y="154" font-size="13" fill="#f4f7fa">Parse do mapa</text>
+    <text x="620" y="172" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">no host</text>
+
+    <rect x="500" y="204" width="240" height="50" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <text x="620" y="226" font-size="13" fill="#f4f7fa">stagedUpload</text>
+    <text x="620" y="244" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">buffers fixados, stream i</text>
+
+    <rect x="500" y="276" width="240" height="50" rx="2" fill="#57708c" stroke="#6ad6b1" stroke-width="1.6"/>
+    <text x="620" y="298" font-size="13" fill="#f4f7fa">fillSelfLoopsKernel</text>
+    <text x="620" y="316" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">auto-laço nos slots vazios</text>
+
+    <rect x="500" y="348" width="240" height="44" rx="2" fill="#4b6079" stroke="#f2bd58" stroke-width="1.6"/>
+    <text x="620" y="368" font-size="13" fill="#f4f7fa">fim do laço</text>
+    <text x="620" y="385" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">próximo jogo</text>
+
+    <rect x="500" y="414" width="240" height="50" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <text x="620" y="436" font-size="13" fill="#f4f7fa">uploadMetadata</text>
+    <text x="620" y="454" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">sementes, offsets, candidatos</text>
+
+    <rect x="500" y="486" width="240" height="50" rx="2" fill="#57708c" stroke="#6ad6b1" stroke-width="1.6"/>
+    <text x="620" y="508" font-size="13" fill="#f4f7fa">seedAgentsKernel</text>
+    <text x="620" y="526" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">posição e estado inicial</text>
+
+    <rect x="500" y="558" width="240" height="38" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <text x="620" y="582" font-size="13" fill="#f4f7fa">turno &#8592; 0</text>
+  </g>
+
+  <!-- ================= coluna C: o turno ================= -->
+  <g font-family="Archivo, Lato, sans-serif" text-anchor="middle">
+    <circle cx="960" cy="44" r="14" fill="#4b6079" stroke="#c5d2e0" stroke-width="1.6"/>
+    <text x="960" y="49" font-size="13" font-weight="600" fill="#f4f7fa">B</text>
+
+    <rect x="840" y="70" width="240" height="64" rx="2" fill="#57708c" stroke="#7d94ad"/>
+    <text x="960" y="94" font-size="13" fill="#f4f7fa">cudaMemsetAsync</text>
+    <text x="960" y="112" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">zerar a máscara de</text>
+    <text x="960" y="127" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">infectados, 1 bit por nó</text>
+
+    <rect x="840" y="158" width="240" height="48" rx="2" fill="#57708c" stroke="#6ad6b1" stroke-width="1.6"/>
+    <text x="960" y="180" font-size="13" fill="#f4f7fa">markInfectedKernel</text>
+    <text x="960" y="198" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">atomicOr no bit do nó</text>
+
+    <rect x="840" y="230" width="240" height="56" rx="2" fill="#57708c" stroke="#6ad6b1" stroke-width="2.2"/>
+    <line x1="850" y1="230" x2="850" y2="286" stroke="#6ad6b1" stroke-width="1.4"/>
+    <line x1="1070" y1="230" x2="1070" y2="286" stroke="#6ad6b1" stroke-width="1.4"/>
+    <text x="960" y="254" font-size="13" fill="#f4f7fa">stepKernel</text>
+    <text x="960" y="272" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">1 thread por agente</text>
+
+    <rect x="840" y="310" width="240" height="52" rx="2" fill="#4b6079" stroke="#7d94ad"/>
+    <text x="960" y="332" font-size="13" fill="#f4f7fa">turno &#8592; turno + 1</text>
+    <text x="960" y="350" font-size="11" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" fill="#c5d2e0">tudo na mesma stream</text>
+
+    <circle cx="960" cy="394" r="14" fill="#4b6079" stroke="#c5d2e0" stroke-width="1.6"/>
+    <text x="960" y="399" font-size="13" font-weight="600" fill="#f4f7fa">A</text>
+  </g>
+
+  <!-- ================= rótulos sim / não ================= -->
+  <g font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" font-size="11" fill="#c5d2e0">
+    <text x="340" y="444">sim</text>
+    <text x="232" y="510">não</text>
+  </g>
+</svg>
