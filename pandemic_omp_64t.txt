@@ -1,0 +1,35 @@
+turno,S,E,I,R,D
+1200,125008,215,76,99546,99775155
+tempo: 13.483 s   
+
+real	0m14.073s
+user	14m14.223s
+sys	0m0.352s
+turno,S,E,I,R,D
+1200,125008,215,76,99546,99775155
+tempo: 13.492 s   
+
+real	0m14.111s
+user	14m15.050s
+sys	0m0.264s
+turno,S,E,I,R,D
+1200,125008,215,76,99546,99775155
+tempo: 13.475 s   
+
+real	0m14.109s
+user	14m13.698s
+sys	0m0.184s
+turno,S,E,I,R,D
+1200,125008,215,76,99546,99775155
+tempo: 13.437 s   
+
+real	0m14.058s
+user	14m11.470s
+sys	0m0.306s
+turno,S,E,I,R,D
+1200,125008,215,76,99546,99775155
+tempo: 13.475 s   
+
+real	0m14.091s
+user	14m13.898s
+sys	0m0.279s
